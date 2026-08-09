@@ -20,8 +20,23 @@ cp .env.example .env      # fill in DATABASE_URL, APP_PASSWORD, UNSUBSCRIBE_SECR
 npm install
 npm run db:migrate
 npm run db:seed
+npm run db:demo           # optional: loads sample.csv so the UI has something in it
 npm run dev               # http://localhost:3000, log in with APP_PASSWORD
 ```
+
+## The workspace
+
+One screen does the work. The sidebar holds Contacts, Suppressions and Mailboxes;
+everything else opens over the list rather than navigating away from it.
+
+- **Filters, search, sort and paging live in the URL.** Nothing is hidden in
+  component state, so any view can be linked, reloaded or shared.
+- **Import is a panel, not a page** — the list stays behind it and updates in place.
+- **Clicking a contact opens a panel** with every field, the raw `context`, its
+  sending eligibility, and the suppress and erase actions.
+- **Bulk suppression appears only when rows are ticked**, using a CSS `:has()`
+  rule rather than client state.
+- **Export CSV exports exactly what the filters are showing.**
 
 ## Checks
 
@@ -34,7 +49,8 @@ npm run dev               # http://localhost:3000, log in with APP_PASSWORD
 CI runs all four against a Postgres 17 service container on every push and PR.
 
 Handy while testing: `npm run db:reset` clears contacts and suppressions,
-`npm run token -- someone@example.com` prints a working unsubscribe URL.
+`npm run db:demo` refills them, and `npm run token -- someone@example.com`
+prints a working unsubscribe URL.
 
 ## Hosting split
 
@@ -82,6 +98,7 @@ rows processed, not distinct people.
 | One suppression check, every send path | `lib/suppression.ts` — the only module that queries `suppressions` |
 | Erasure keeps the hash | `lib/contacts.ts` `eraseContact()` — suppresses before nulling |
 | Idempotent import | unique indexes on `lower(email)` and `linkedin_url` + `ON CONFLICT DO NOTHING` |
+| Unknown verification results never become sendable | `lib/csv.ts` — any unrecognised status falls back to `unverified` |
 | Message-ID capture | `messages.message_id_header`, indexed, for phase 4 |
 | Catch-all sending restrictions | `mailboxes.sends_catch_all` — enforced in phase 3 |
 
