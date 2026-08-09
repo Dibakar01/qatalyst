@@ -11,15 +11,30 @@ Phases 2 (personalisation + review), 3 (sending), 4 (replies/bounces) are not.
 
 ## Setup
 
+Any Postgres works — local, Railway, Neon. The driver is `postgres.js` over the
+standard wire protocol, not a vendor-specific one.
+
 ```sh
+brew install postgresql@17 && brew services start postgresql@17 && createdb qatalyst
 cp .env.example .env      # fill in DATABASE_URL, APP_PASSWORD, UNSUBSCRIBE_SECRET
 npm install
 npm run db:migrate
 npm run db:seed
-npm run dev
+npm run dev               # http://localhost:3000, log in with APP_PASSWORD
 ```
 
-`npm test` runs the pure-function checks (token signing, CSV row mapping). No database needed.
+## Checks
+
+| | |
+|---|---|
+| `npm test` | pure functions — token signing, CSV row mapping. No database. |
+| `npm run test:acceptance` | the phase 1 criteria end to end. **Truncates tables**; refuses to run against anything but localhost. |
+| `npm run lint` / `npm run build` | |
+
+CI runs all four against a Postgres 17 service container on every push and PR.
+
+Handy while testing: `npm run db:reset` clears contacts and suppressions,
+`npm run token -- someone@example.com` prints a working unsubscribe URL.
 
 ## Hosting split
 
@@ -45,21 +60,27 @@ deployment needs no token table and no session.
 
 ## Acceptance check for phase 1
 
+`npm run test:acceptance` asserts all of this. By hand, in the UI:
+
 1. Import `sample.csv` at `/import`, mapping `First → first_name`,
-   `Work Email → email`, `Org → company`, `Role → title`, `Profile → linkedin_url`.
-   Expect 3 new, 1 duplicate, 1 suppressed (seeded), 1 malformed.
-   `Funding round` and `Notes` land in `context`.
+   `Last → last_name`, `Work Email → email`, `Org → company`, `Role → title`,
+   `Profile → linkedin_url`. Expect 3 new, 1 duplicate, 1 suppressed (seeded),
+   1 malformed. `Funding round` and `Notes` land in `context`.
 2. Import the same file again. Expect 0 new, 4 duplicates.
 3. Erase a contact at `/contacts` — fields null, `erased_at` set, suppression survives.
 4. Re-import: the erased contact is now counted as suppressed, not resurrected.
-5. `curl https://<public-origin>/u/<token>` returns the confirmation page.
+5. `curl $(npm run token --silent -- grace@compiler.example)` returns the
+   confirmation page and writes a hashed suppression.
+
+The four counts always sum to the number of rows in the file — they describe
+rows processed, not distinct people.
 
 ## Where the rules live
 
 | Rule | Code |
 |---|---|
 | One suppression check, every send path | `lib/suppression.ts` — the only module that queries `suppressions` |
-| Erasure keeps the hash | `app/contacts/page.tsx` `erase()` — suppresses before nulling |
+| Erasure keeps the hash | `lib/contacts.ts` `eraseContact()` — suppresses before nulling |
 | Idempotent import | unique indexes on `lower(email)` and `linkedin_url` + `ON CONFLICT DO NOTHING` |
 | Message-ID capture | `messages.message_id_header`, indexed, for phase 4 |
 | Catch-all sending restrictions | `mailboxes.sends_catch_all` — enforced in phase 3 |
