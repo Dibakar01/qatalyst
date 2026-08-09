@@ -9,6 +9,8 @@ export const FIELDS = [
   'title',
   'linkedin_url',
   'source',
+  'email_status',
+  'consent_status',
 ] as const
 
 export type Field = (typeof FIELDS)[number]
@@ -18,6 +20,36 @@ export type Mapping = Partial<Record<Field, string>>
 export type Row = Record<string, string>
 
 export type MapResult = { contact: NewContact } | { error: string }
+
+type EmailStatus = NonNullable<NewContact['emailStatus']>
+
+/**
+ * Verification vendors all spell these differently. Anything unrecognised falls
+ * back to `unverified`, which is the never-send default — a typo in a CSV must
+ * not be able to promote an address to sendable.
+ */
+const EMAIL_STATUS_ALIASES: Record<string, EmailStatus> = {
+  valid: 'verified',
+  verified: 'verified',
+  deliverable: 'verified',
+  ok: 'verified',
+  safe: 'verified',
+  catch_all: 'catch_all',
+  'catch-all': 'catch_all',
+  catchall: 'catch_all',
+  accept_all: 'catch_all',
+  'accept-all': 'catch_all',
+  invalid: 'invalid',
+  undeliverable: 'invalid',
+  bounced: 'invalid',
+  bounce: 'invalid',
+}
+
+const asEmailStatus = (raw: string): EmailStatus =>
+  EMAIL_STATUS_ALIASES[raw.trim().toLowerCase().replace(/\s+/g, '_')] ?? 'unverified'
+
+// Consent is opt-in only when the CSV says so unambiguously.
+const CONSENT_YES = new Set(['opted_in', 'opted-in', 'opt_in', 'true', 'yes', 'y', '1', 'subscribed'])
 
 /**
  * Pure: one CSV row + a mapping -> a contact, or a reason it was rejected.
@@ -51,6 +83,8 @@ export function mapRow(row: Row, mapping: Mapping): MapResult {
       title: get('title') || null,
       linkedinUrl: linkedinUrl || null,
       source: get('source') || null,
+      emailStatus: asEmailStatus(get('email_status')),
+      consentStatus: CONSENT_YES.has(get('consent_status').toLowerCase()) ? 'opted_in' : 'none',
       context,
     },
   }

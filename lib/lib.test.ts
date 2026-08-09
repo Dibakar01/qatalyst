@@ -52,6 +52,41 @@ test('malformed emails are rejected, not stored', () => {
   assert.ok('error' in mapRow({ 'Work Email': 'a@b.com, c@d.com' }, mapping))
 })
 
+test('verification statuses are normalised, and only when recognised', () => {
+  const at = (value: string) => {
+    const r = mapRow({ E: 'a@b.com', S: value }, { email: 'E', email_status: 'S' })
+    assert.ok('contact' in r)
+    return r.contact.emailStatus
+  }
+  assert.equal(at('Valid'), 'verified')
+  assert.equal(at('DELIVERABLE'), 'verified')
+  assert.equal(at('catch-all'), 'catch_all')
+  assert.equal(at('Accept All'), 'catch_all')
+  assert.equal(at('undeliverable'), 'invalid')
+  // Anything we do not recognise must land on the never-send default, so a
+  // stray vendor value can never promote an address to sendable.
+  assert.equal(at('unknown'), 'unverified')
+  assert.equal(at('probably fine'), 'unverified')
+  assert.equal(at(''), 'unverified')
+
+  const unmapped = mapRow({ E: 'a@b.com' }, { email: 'E' })
+  assert.ok('contact' in unmapped)
+  assert.equal(unmapped.contact.emailStatus, 'unverified')
+  assert.equal(unmapped.contact.consentStatus, 'none')
+})
+
+test('consent is opt-in only when the CSV says so plainly', () => {
+  const at = (value: string) => {
+    const r = mapRow({ E: 'a@b.com', C: value }, { email: 'E', consent_status: 'C' })
+    assert.ok('contact' in r)
+    return r.contact.consentStatus
+  }
+  assert.equal(at('Yes'), 'opted_in')
+  assert.equal(at('opted_in'), 'opted_in')
+  assert.equal(at('no'), 'none')
+  assert.equal(at('maybe'), 'none')
+})
+
 test('linkedin-only rows are accepted', () => {
   const result = mapRow(
     { Profile: 'https://linkedin.com/in/ada' },

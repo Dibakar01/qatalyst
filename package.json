@@ -14,6 +14,7 @@
     "db:seed": "node --env-file-if-exists=.env scripts/seed.ts",
     "db:studio": "drizzle-kit studio",
     "db:reset": "node --env-file-if-exists=.env scripts/reset.ts",
+    "db:demo": "node --env-file-if-exists=.env scripts/demo.ts",
     "token": "node --env-file-if-exists=.env scripts/token.ts"
   },
   "dependencies": {
