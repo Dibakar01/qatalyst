@@ -3,6 +3,7 @@ import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { consentStatus, contacts, emailStatus } from '@/db/schema'
 import { requireAuth } from '@/lib/auth'
+import { eraseContact } from '@/lib/contacts'
 import { suppress } from '@/lib/suppression'
 
 const LIMIT = 200
@@ -18,32 +19,10 @@ async function addSuppression(formData: FormData) {
   revalidatePath('/contacts')
 }
 
-/**
- * DPDP erasure: personal fields go, `erased_at` is stamped, the suppression hash
- * stays. Suppressing first is deliberate — once the address is gone we could
- * never honour a future request for it, and a re-import would resurrect them.
- */
 async function erase(formData: FormData) {
   'use server'
   await requireAuth()
-  const id = String(formData.get('id') ?? '')
-  const [row] = await db.select({ email: contacts.email }).from(contacts).where(eq(contacts.id, id))
-  if (!row) return
-  if (row.email) await suppress(row.email, 'manual')
-  await db
-    .update(contacts)
-    .set({
-      firstName: null,
-      lastName: null,
-      email: null,
-      company: null,
-      title: null,
-      linkedinUrl: null,
-      context: {},
-      erasedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(eq(contacts.id, id))
+  await eraseContact(String(formData.get('id') ?? ''))
   revalidatePath('/contacts')
 }
 

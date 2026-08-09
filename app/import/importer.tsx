@@ -2,8 +2,9 @@
 
 import Papa from 'papaparse'
 import { Fragment, useState } from 'react'
+import type { ImportCounts } from '@/lib/contacts'
 import { FIELDS, type Mapping, type Row } from '@/lib/csv'
-import { importRows, type ImportCounts } from './actions'
+import { importRows } from './actions'
 
 export default function Importer() {
   const [fileName, setFileName] = useState('')
