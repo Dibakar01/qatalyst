@@ -1,8 +1,61 @@
 @import "tailwindcss";
 
+/* One small palette, used everywhere. Colour carries meaning (status), never
+   decoration. Everything else is ink on paper. */
+@theme {
+  --color-canvas: #eff0f2;
+  --color-surface: #ffffff;
+  --color-line: #e8e9ec;
+  --color-ink: #0d0f12;
+  --color-muted: #71757c;
+  --color-faint: #f7f8f9;
+}
+
+html,
 body {
-  background: #fff;
-  color: #171717;
-  font-family: ui-sans-serif, system-ui, sans-serif;
-  font-size: 13px;
+  height: 100%;
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 13.5px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background: var(--color-ink);
+  color: #fff;
+}
+
+/* Focus is visible, quiet, and consistent — never a browser default halo. */
+:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .panel-in {
+    animation: panel-in 180ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .veil-in {
+    animation: veil-in 180ms ease-out;
+  }
+}
+
+@keyframes panel-in {
+  from {
+    transform: translateX(12px);
+    opacity: 0;
+  }
+}
+
+@keyframes veil-in {
+  from {
+    opacity: 0;
+  }
 }
