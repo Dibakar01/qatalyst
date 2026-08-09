@@ -1,0 +1,7 @@
+First,Last,Work Email,Org,Role,Profile,Funding round,Notes
+Ada,Lovelace,ada@analytical.example,Analytical Engines,CTO,https://linkedin.com/in/adalovelace,Series A,"Spoke at PyCon, mentioned batch jobs"
+Grace,Hopper,grace@compiler.example,Compiler Co,VP Engineering,https://linkedin.com/in/gracehopper,Seed,
+Alan,Turing,,Bletchley Labs,Head of Research,https://linkedin.com/in/alanturing,,No email on file
+Blocked,Person,blocked@example.com,Do Not Mail Ltd,CEO,,Series B,
+Broken,Row,not-an-email,Malformed Inc,Founder,,,
+Ada,Lovelace,ADA@analytical.example,Analytical Engines,CTO,https://linkedin.com/in/adalovelace,Series A,Duplicate of row 1
