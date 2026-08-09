@@ -1,4 +1,4 @@
-import type { NewContact } from '@/db/schema'
+import type { NewContact } from '../db/schema.ts'
 import { isValidEmail, normalise } from './email.ts'
 
 export const FIELDS = [

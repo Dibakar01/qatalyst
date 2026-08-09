@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto'
-import { neon } from '@neondatabase/serverless'
-import { drizzle } from 'drizzle-orm/neon-http'
+import { drizzle } from 'drizzle-orm/postgres-js'
+import postgres from 'postgres'
 import { mailboxes, suppressions } from '../db/schema.ts'
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is not set')
-const db = drizzle(neon(process.env.DATABASE_URL))
+
+const sql = postgres(process.env.DATABASE_URL, { max: 1 })
+const db = drizzle(sql)
 
 const domain = process.env.SEND_DOMAIN ?? 'example.com'
 
@@ -26,4 +28,5 @@ await db
   })
   .onConflictDoNothing()
 
+await sql.end()
 console.log('seeded')

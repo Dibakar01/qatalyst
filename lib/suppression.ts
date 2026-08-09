@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { db } from '@/db'
-import { suppressions } from '@/db/schema'
+import { db } from '../db/index.ts'
+import { suppressions } from '../db/schema.ts'
 import { domainOf, normalise } from './email.ts'
 
 type Reason = (typeof suppressions.reason.enumValues)[number]

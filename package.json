@@ -8,16 +8,19 @@
     "start": "next start",
     "lint": "eslint",
     "test": "node --test lib/*.test.ts",
+    "test:acceptance": "node --env-file-if-exists=.env scripts/acceptance.ts",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "node --env-file=.env scripts/migrate.ts",
-    "db:seed": "node --env-file=.env scripts/seed.ts",
-    "db:studio": "drizzle-kit studio"
+    "db:migrate": "node --env-file-if-exists=.env scripts/migrate.ts",
+    "db:seed": "node --env-file-if-exists=.env scripts/seed.ts",
+    "db:studio": "drizzle-kit studio",
+    "db:reset": "node --env-file-if-exists=.env scripts/reset.ts",
+    "token": "node --env-file-if-exists=.env scripts/token.ts"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^1.1.0",
     "drizzle-orm": "^0.45.2",
     "next": "16.3.0",
     "papaparse": "^5.5.4",
+    "postgres": "^3.4.9",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
