@@ -1,12 +1,13 @@
-// Phase 1 acceptance criteria, run against a local database.
+// Phase 1-3 acceptance criteria, run against a local database.
 //   npm run test:acceptance
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { sql as raw } from 'drizzle-orm'
 import Papa from 'papaparse'
 import { db, sql } from '../db/index.ts'
-import { contacts, suppressions } from '../db/schema.ts'
+import { campaigns, contacts, events, mailboxes, messages, suppressions } from '../db/schema.ts'
 import { eraseContact, runImport } from '../lib/contacts.ts'
+import { sendTick } from '../lib/send.ts'
 import type { Mapping, Row } from '../lib/csv.ts'
 import { emailHash, isSuppressed, suppress } from '../lib/suppression.ts'
 import { makeToken, readToken } from '../lib/token.ts'
@@ -108,5 +109,95 @@ assert.equal(
 )
 ok('token round-trips, writes a hashed suppression')
 
+
+console.log('6. sending: eligibility, pacing and suppression at the wire')
+await db.execute(raw`truncate contacts, suppressions, messages, events, mailboxes, campaigns restart identity cascade`)
+
+const [, catchAllBox] = await db
+  .insert(mailboxes)
+  .values([
+    { email: 'a@qalakaar.test', dailyCap: 35, sendsCatchAll: false },
+    { email: 'b@qalakaar.test', dailyCap: 35, sendsCatchAll: true },
+  ])
+  .returning()
+
+const [campaign] = await db
+  .insert(campaigns)
+  .values({ name: 'Acceptance', status: 'sending', bodyTemplate: '{{personalised}}' })
+  .returning()
+
+const people = await db
+  .insert(contacts)
+  .values([
+    { email: 'v@example.test', firstName: 'Vee', emailStatus: 'verified' },
+    { email: 'c@example.test', firstName: 'Cee', emailStatus: 'catch_all' },
+    { email: 'u@example.test', firstName: 'You', emailStatus: 'unverified' },
+    { email: 's@example.test', firstName: 'Ess', emailStatus: 'verified' },
+  ])
+  .returning()
+const by = Object.fromEntries(people.map((p) => [p.email!, p]))
+
+await suppress('s@example.test', 'manual')
+await db.insert(messages).values(
+  people.map((person) => ({
+    campaignId: campaign.id,
+    contactId: person.id,
+    subject: 'Hello',
+    body: 'A body with an opt-out.',
+    status: 'approved' as const,
+  })),
+)
+
+const noon = new Date()
+noon.setHours(12, 0, 0, 0)
+const early = new Date()
+early.setHours(7, 0, 0, 0)
+
+assert.equal((await sendTick(early)).sent, 0, 'nothing goes out before the window opens')
+ok('outside the sending window nothing is sent')
+
+const tick = await sendTick(noon)
+assert.equal(tick.sent, 2, 'one send per mailbox per tick, never a burst')
+assert.equal(tick.dryRun, true, 'no Gmail credentials configured, so this was a dry run')
+
+const afterFirst = await db.select().from(messages)
+const state = (email: string) => afterFirst.find((m) => m.contactId === by[email].id)!
+
+assert.equal(state('v@example.test').status, 'sent', 'verified sends')
+assert.equal(state('c@example.test').status, 'sent', 'catch-all sends from the flagged mailbox')
+assert.equal(state('u@example.test').status, 'approved', 'unverified is never sent')
+ok('verified and catch-all sent, unverified never')
+
+assert.equal(
+  state('c@example.test').mailboxId,
+  catchAllBox.id,
+  'catch-all only ever leaves the mailbox flagged for it',
+)
+assert.notEqual(state('v@example.test').mailboxId, null)
+ok('catch-all used the catch-all mailbox')
+
+for (const email of ['v@example.test', 'c@example.test']) {
+  assert.ok(state(email).messageIdHeader, `Message-ID captured for ${email}`)
+  assert.ok(state(email).sentAt)
+}
+ok('rule 6: every send captured its Message-ID')
+
+const sentEvents = await db.select().from(events).where(raw`type = 'sent'`)
+assert.equal(sentEvents.length, 2, 'one event per delivery')
+ok('deliveries are recorded as events')
+
+// The second tick scans past what it may not send: the unverified contact is
+// skipped, and the suppressed one is taken out of the queue rather than mailed.
+const secondTick = await sendTick(noon)
+assert.equal(secondTick.sent, 0, 'nothing eligible is left')
+
+const afterSecond = await db.select().from(messages)
+const later = (email: string) => afterSecond.find((m) => m.contactId === by[email].id)!
+assert.equal(later('s@example.test').status, 'flagged', 'suppressed is caught before delivery')
+assert.equal(later('s@example.test').error, 'suppressed before sending')
+assert.equal(later('u@example.test').status, 'approved', 'unverified is left alone, never sent')
+assert.equal(afterSecond.filter((m) => m.status === 'sent').length, 2, 'still only two sent')
+ok('suppression stops a delivery at send time, not just at import')
+
 await sql.end()
-console.log('\nphase 1 acceptance: all checks passed')
+console.log('\nphase 1-3 acceptance: all checks passed')
