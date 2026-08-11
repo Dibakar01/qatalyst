@@ -83,7 +83,10 @@ export const campaigns = pgTable('campaigns', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
   subjectTemplate: text('subject_template').notNull().default(''),
+  // Must contain {{personalised}} — the one slot the model writes. Everything
+  // else is fixed text, which is what makes the validators exact.
   bodyTemplate: text('body_template').notNull().default(''),
+  prompt: text('prompt').notNull().default(''),
   status: campaignStatus('status').notNull().default('draft'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 })
@@ -114,6 +117,7 @@ export const messages = pgTable(
     // RFC 5322 Message-ID of the sent mail. Without it, replies and bounces
     // cannot be matched back to what we sent (phase 4).
     messageIdHeader: text('message_id_header'),
+    error: text('error'),
     sentAt: timestamp('sent_at', { withTimezone: true }),
   },
   (t) => [
@@ -137,3 +141,6 @@ export const events = pgTable(
 
 export type Contact = typeof contacts.$inferSelect
 export type NewContact = typeof contacts.$inferInsert
+export type Campaign = typeof campaigns.$inferSelect
+export type Message = typeof messages.$inferSelect
+export type Mailbox = typeof mailboxes.$inferSelect

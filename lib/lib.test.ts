@@ -6,6 +6,17 @@ process.env.UNSUBSCRIBE_SECRET = 'test-secret'
 
 const { makeToken, readToken } = await import('./token.ts')
 const { mapRow } = await import('./csv.ts')
+const { assembleBody, fill, missing, variables } = await import('./template.ts')
+const { validate, claims, ungrounded } = await import('./validators.ts')
+const { allowanceNow, maySend, shouldHalt, WINDOW } = await import('./rules.ts')
+
+const ada = {
+  firstName: 'Ada',
+  lastName: 'Lovelace',
+  company: 'Analytical Engines',
+  title: 'CTO',
+  context: { 'Funding round': 'Series A', Notes: 'Spoke at PyCon about batch jobs' },
+}
 
 test('unsubscribe token round-trips and normalises', () => {
   assert.equal(readToken(makeToken('  Ada@Example.COM ')), 'ada@example.com')
@@ -94,4 +105,96 @@ test('linkedin-only rows are accepted', () => {
   )
   assert.ok('contact' in result)
   assert.equal(result.contact.email, null)
+})
+
+/* templates --------------------------------------------------------------- */
+
+test('templates fill from contact fields and context columns', () => {
+  const values = variables(ada)
+  assert.equal(
+    fill('Hi {{first_name}} at {{company}} ({{context.Funding round}})', values),
+    'Hi Ada at Analytical Engines (Series A)',
+  )
+  assert.equal(fill('Hi {{first_name}}, {{nope}}', values), 'Hi Ada, ')
+})
+
+test('gaps in a template are reported rather than shipped silently', () => {
+  const values = variables({ ...ada, company: null })
+  assert.deepEqual(missing('Hi {{first_name}} at {{company}}. {{personalised}}', values), [
+    'company',
+  ])
+})
+
+test('every assembled body carries an opt-out sentence and the link', () => {
+  const body = assembleBody('Hi Ada,\n\nSomething specific.', 'https://u.example/abc')
+  assert.match(body, /would rather I did not write again/)
+  assert.ok(body.includes('https://u.example/abc'))
+  // Rule 4: no List-Unsubscribe headers anywhere near a person-to-person email.
+  assert.doesNotMatch(body, /List-Unsubscribe/i)
+})
+
+/* validators -------------------------------------------------------------- */
+
+test('grounding: claims are the numbers and mid-sentence proper nouns', () => {
+  const found = claims('Congratulations on the Series A. I saw 40 new roles at Bletchley.')
+  assert.ok(found.includes('Series'))
+  assert.ok(found.includes('40'))
+  assert.ok(found.includes('Bletchley'))
+  assert.ok(!found.includes('Congratulations'), 'sentence-initial words are not claims')
+  assert.ok(!found.includes('I'))
+})
+
+test('grounding: invented detail is flagged, real detail is not', () => {
+  assert.deepEqual(ungrounded('Congratulations on the Series A round.', ada), [])
+  assert.deepEqual(ungrounded('Loved your talk at PyCon.', ada), [])
+  assert.deepEqual(ungrounded('Congratulations on the Series B round.', ada), ['B'])
+  assert.ok(validate('I saw you raised 40 million from Sequoia.', ada).includes('ungrounded'))
+})
+
+test('substance: mail-merge dressed as personalisation is flagged', () => {
+  assert.ok(validate('I saw you are CTO at Analytical Engines.', ada).includes('thin'))
+  assert.ok(validate('Hi Ada!', ada).includes('thin'))
+  assert.deepEqual(
+    validate('Your PyCon talk on batch jobs matched a problem we keep hitting with scheduling.', ada),
+    [],
+  )
+})
+
+test('a message only passes when both validators pass', () => {
+  // Grounded but thin, and substantial but invented — each fails on its own.
+  assert.deepEqual(validate('Series A, congratulations.', ada), ['thin'])
+  assert.deepEqual(
+    validate('Your recent acquisition of Bletchley Park caught our attention here.', ada),
+    ['ungrounded'],
+  )
+})
+
+/* sending rules ----------------------------------------------------------- */
+
+test('the daily cap is released across the window, never in a burst', () => {
+  assert.equal(allowanceNow(35, 0, WINDOW.start - 1), 0, 'nothing before the window opens')
+  assert.equal(allowanceNow(35, 0, WINDOW.end), 0, 'nothing after it closes')
+  assert.equal(allowanceNow(35, 0, WINDOW.start), 0, 'the cap is not unlocked at 09:00')
+  assert.equal(allowanceNow(35, 0, WINDOW.start + 240), 17, 'about half way by mid-afternoon')
+  assert.equal(allowanceNow(35, 17, WINDOW.start + 240), 0, 'already sent its share')
+  // The whole point: a worker down all morning cannot dump the backlog at 16:59.
+  assert.ok(allowanceNow(35, 0, WINDOW.end - 1) < 35)
+})
+
+test('send eligibility follows email status, not hope', () => {
+  const plain = { sendsCatchAll: false, active: true }
+  const catchAll = { sendsCatchAll: true, active: true }
+  assert.equal(maySend('verified', plain), true)
+  assert.equal(maySend('catch_all', plain), false, 'catch-all needs a mailbox flagged for it')
+  assert.equal(maySend('catch_all', catchAll), true)
+  assert.equal(maySend('unverified', catchAll), false)
+  assert.equal(maySend('invalid', catchAll), false)
+  assert.equal(maySend('verified', { ...plain, active: false }), false)
+})
+
+test('a mailbox halts above 3% bounces, but not on a tiny sample', () => {
+  assert.equal(shouldHalt(2, 1), false, 'one bounce in three proves nothing')
+  assert.equal(shouldHalt(97, 3), false, 'exactly 3% is not above 3%')
+  assert.equal(shouldHalt(96, 4), true)
+  assert.equal(shouldHalt(1000, 0), false)
 })

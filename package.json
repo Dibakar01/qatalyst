@@ -15,9 +15,11 @@
     "db:studio": "drizzle-kit studio",
     "db:reset": "node --env-file-if-exists=.env scripts/reset.ts",
     "db:demo": "node --env-file-if-exists=.env scripts/demo.ts",
-    "token": "node --env-file-if-exists=.env scripts/token.ts"
+    "token": "node --env-file-if-exists=.env scripts/token.ts",
+    "send": "node --env-file-if-exists=.env scripts/send.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.116.0",
     "drizzle-orm": "^0.45.2",
     "next": "16.3.0",
     "papaparse": "^5.5.4",
