@@ -6,6 +6,6 @@ if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? '')) {
   throw new Error('refusing to run: DATABASE_URL is not local')
 }
 
-await db.execute(raw`truncate contacts, suppressions, messages, events restart identity cascade`)
+await db.execute(raw`truncate contacts, suppressions, campaigns, messages, events, mailboxes restart identity cascade`)
 await sql.end()
-console.log('contacts, suppressions, messages and events cleared — run npm run db:seed next')
+console.log('everything cleared — run npm run db:seed next')
