@@ -9,6 +9,7 @@ const { mapRow } = await import('./csv.ts')
 const { assembleBody, fill, missing, variables } = await import('./template.ts')
 const { validate, claims, ungrounded } = await import('./validators.ts')
 const { allowanceNow, batchSize, maySend, shouldHalt, WINDOW } = await import('./rules.ts')
+const mat4 = await import('./mat4.ts')
 
 const ada = {
   firstName: 'Ada',
@@ -200,6 +201,44 @@ test('a typed batch size can never run away with the model budget', () => {
   assert.equal(batchSize('40.5'), 25, 'half a draft is not a batch')
   assert.equal(batchSize('40'), 40)
   assert.equal(batchSize('500'), 100, 'the ceiling holds however big the ask')
+})
+
+/* the letter's matrices --------------------------------------------------- */
+
+// Column-major, and multiply applies right to left. Both are easy to get
+// backwards and the symptom is a model that is inside out rather than an error.
+const close = (a: Float32Array, b: number[], why: string) =>
+  a.forEach((v, i) => assert.ok(Math.abs(v - b[i]) < 1e-6, `${why} at ${i}: ${v} ≠ ${b[i]}`))
+
+test('a matrix multiplied by the identity is unchanged', () => {
+  const m = mat4.translation(3, -2, 7)
+  close(mat4.multiply(mat4.identity(), m), [...m], 'identity on the left')
+  close(mat4.multiply(m, mat4.identity()), [...m], 'identity on the right')
+})
+
+test('translation lands in the fourth column, where WebGL reads it', () => {
+  const m = mat4.translation(3, -2, 7)
+  assert.deepEqual([m[12], m[13], m[14], m[15]], [3, -2, 7, 1])
+})
+
+test('multiply applies the right-hand matrix first', () => {
+  // Rotate, then move: the offset must survive untouched in the last column.
+  // If the order were flipped the rotation would spin the offset too.
+  const m = mat4.multiply(mat4.translation(0, 0, -5), mat4.rotationY(Math.PI / 2))
+  close(m, [0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, -5, 1], 'move after turn')
+})
+
+test('a quarter turn about y sends +x to -z', () => {
+  // First column is where the x axis ends up. Right-handed, so it goes to -z.
+  const m = mat4.rotationY(Math.PI / 2)
+  close(m.slice(0, 4) as Float32Array, [0, 0, -1, 0], 'x axis')
+})
+
+test('perspective puts -1 in the w row, so w becomes the depth', () => {
+  const m = mat4.perspective(Math.PI / 4, 2, 0.1, 100)
+  assert.ok(Math.abs(m[0] - 1 / Math.tan(Math.PI / 8) / 2) < 1e-6, 'x is divided by aspect')
+  assert.equal(m[11], -1)
+  assert.equal(m[15], 0)
 })
 
 test('a mailbox halts above 3% bounces, but not on a tiny sample', () => {
