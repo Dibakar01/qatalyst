@@ -8,7 +8,7 @@ const { makeToken, readToken } = await import('./token.ts')
 const { mapRow } = await import('./csv.ts')
 const { assembleBody, fill, missing, variables } = await import('./template.ts')
 const { validate, claims, ungrounded } = await import('./validators.ts')
-const { allowanceNow, maySend, shouldHalt, WINDOW } = await import('./rules.ts')
+const { allowanceNow, batchSize, maySend, shouldHalt, WINDOW } = await import('./rules.ts')
 
 const ada = {
   firstName: 'Ada',
@@ -190,6 +190,16 @@ test('send eligibility follows email status, not hope', () => {
   assert.equal(maySend('unverified', catchAll), false)
   assert.equal(maySend('invalid', catchAll), false)
   assert.equal(maySend('verified', { ...plain, active: false }), false)
+})
+
+test('a typed batch size can never run away with the model budget', () => {
+  assert.equal(batchSize(''), 25, 'no argument means the default')
+  assert.equal(batchSize('abc'), 25)
+  assert.equal(batchSize('-3'), 25)
+  assert.equal(batchSize('0'), 25)
+  assert.equal(batchSize('40.5'), 25, 'half a draft is not a batch')
+  assert.equal(batchSize('40'), 40)
+  assert.equal(batchSize('500'), 100, 'the ceiling holds however big the ask')
 })
 
 test('a mailbox halts above 3% bounces, but not on a tiny sample', () => {

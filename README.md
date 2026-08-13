@@ -20,9 +20,37 @@ Contacts ──▶ Campaign ──▶ Review ──▶ Send
   + verify    message       each one   own mailboxes
 ```
 
-Three screens, in the sidebar: **Campaigns**, **Contacts**, **Settings**. The
-campaign screen is four numbered steps on one page — write the message, pick up
-the audience, review what came back, start sending.
+It is one screen, and it is a desk rather than a set of pages. A near-white
+frame, a lit black stage inside it, and on that stage exactly two objects: the
+instrument card on the left, and one sheet of paper in front of you.
+
+The paper is the point. This app writes letters, so a letter is drawn as a
+letter — real stock, a real serif, a page width you can read — and everything
+else is machinery that stays out of its way. Campaigns are **letters** on the
+desk, contacts are the **address book**, mailboxes are **post boxes**, and the
+suppression list is what came back **returned**.
+
+The card never moves and answers the four questions you have every morning:
+what needs me, what is written, how much postage is released right now, and
+where is everything else. A letter itself is four numbered clauses — the
+message, the round, the reading, the post.
+
+Along the bottom is a command line. `⌘K` focuses it; anything it does not
+recognise is treated as a search of the address book.
+
+```
+new <name>   write [n]   sign   post   hold   collect
+find <text>  book        import suppress <email>   block <domain>
+boxes        returned    desk
+```
+
+`write`, `sign`, `post` and `hold` act on the open letter and refuse to run
+without one. Everything a command does is also a button on the paper, and both
+post to the same server action.
+
+Colour only ever says something: blue is the one forward action, oxblood is
+stop, mustard is a mark in the margin meaning a person must look. A sheet with
+no colour on it is a sheet with nothing wrong.
 
 ## Setup
 

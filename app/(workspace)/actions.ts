@@ -23,6 +23,7 @@ import {
 } from '@/lib/contacts'
 import type { Mapping, Row } from '@/lib/csv'
 import { generateForCampaign } from '@/lib/generate'
+import { batchSize } from '@/lib/rules'
 import { sendTick } from '@/lib/send'
 import { suppress, suppressDomain } from '@/lib/suppression'
 
@@ -67,7 +68,7 @@ export async function erase(formData: FormData) {
   await requireAuth()
   await eraseContact(field(formData, 'id'))
   refresh()
-  redirect('/contacts')
+  redirect('/?view=book')
 }
 
 export async function saveStatus(formData: FormData) {
@@ -87,7 +88,7 @@ export async function newCampaign(formData: FormData) {
   const name = field(formData, 'name') || 'Untitled campaign'
   const campaign = await createCampaign(name)
   refresh()
-  redirect(`/c/${campaign.id}`)
+  redirect(`/?c=${campaign.id}`)
 }
 
 export async function saveCampaignAction(formData: FormData) {
@@ -104,7 +105,9 @@ export async function saveCampaignAction(formData: FormData) {
 /** One click writes a bounded batch — a form post should not hang for minutes. */
 export async function generateAction(formData: FormData) {
   await requireAuth()
-  await generateForCampaign(field(formData, 'id'), 25)
+  // `write 40` may ask for a bigger batch than the default, but not an
+  // unbounded one — every draft is a model call.
+  await generateForCampaign(field(formData, 'id'), batchSize(field(formData, 'n')))
   refresh()
 }
 

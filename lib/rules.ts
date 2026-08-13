@@ -40,6 +40,16 @@ export function maySend(
   return false
 }
 
+/**
+ * How many drafts one `write` may ask for. Every draft is a model call, so the
+ * number a person typed is never trusted straight through — anything that is
+ * not a positive whole number falls back to the default, and 100 is the ceiling.
+ */
+export function batchSize(asked: string, fallback = 25) {
+  const n = Number(asked)
+  return Number.isInteger(n) && n > 0 ? Math.min(n, 100) : fallback
+}
+
 /** Rule 2: a mailbox bouncing above 3% halts its campaigns automatically. */
 export function shouldHalt(sent: number, bounced: number) {
   const total = sent + bounced
