@@ -1,24 +1,22 @@
 import Link from 'next/link'
 import { listCampaigns } from '@/lib/campaigns'
 import { newCampaign } from './actions'
-import { button, field, Pill } from './ui'
+import { accent, field, Pill, Screen } from './ui'
 
 export default async function CampaignsPage() {
   const rows = await listCampaigns()
 
   return (
-    <>
-      <header className="flex items-center justify-between gap-3 border-b border-line px-5 py-3.5">
-        <div>
-          <h1 className="text-[15px] font-semibold tracking-tight">Campaigns</h1>
-          <p className="text-muted">Write, review, then send from our own mailboxes.</p>
-        </div>
-        <form action={newCampaign} className="flex gap-2">
+    <Screen
+      title="Campaigns"
+      note="Write, review, then send from our own mailboxes."
+      actions={
+        <form action={newCampaign} className="flex shrink-0 gap-2">
           <input name="name" placeholder="New campaign name" className={`${field} w-56`} />
-          <button className={button}>Create</button>
+          <button className={accent}>Create</button>
         </form>
-      </header>
-
+      }
+    >
       {rows.length === 0 ? (
         <div className="grid flex-1 place-items-center px-6 py-16 text-center">
           <div>
@@ -34,7 +32,7 @@ export default async function CampaignsPage() {
             <Link
               key={campaign.id}
               href={`/c/${campaign.id}`}
-              className="flex items-center gap-4 border-b border-line px-5 py-3 hover:bg-faint"
+              className="flex items-center gap-4 border-b border-line px-6 py-3.5 transition-colors hover:bg-raised/50"
             >
               <span className="w-64 shrink-0 truncate font-medium">{campaign.name}</span>
               <Pill>{campaign.status}</Pill>
@@ -49,6 +47,6 @@ export default async function CampaignsPage() {
           ))}
         </div>
       )}
-    </>
+    </Screen>
   )
 }

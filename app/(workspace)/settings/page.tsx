@@ -3,7 +3,7 @@ import { db } from '@/db'
 import { mailboxes, suppressions } from '@/db/schema'
 import { isConfigured } from '@/lib/gmail'
 import { blockDomain } from '../actions'
-import { button, field, Pill } from '../ui'
+import { button, field, Pill, Screen } from '../ui'
 
 export default async function SettingsPage() {
   const [boxes, blocks] = await Promise.all([
@@ -13,26 +13,21 @@ export default async function SettingsPage() {
   const capacity = boxes.filter((box) => box.active).reduce((total, box) => total + box.dailyCap, 0)
 
   return (
-    <>
-      <header className="border-b border-line px-5 py-3.5">
-        <h1 className="text-[15px] font-semibold tracking-tight">Settings</h1>
-        <p className="text-muted">Mailboxes we send from, and addresses we never send to.</p>
-      </header>
-
+    <Screen title="Settings" note="Mailboxes we send from, and addresses we never send to.">
       <div className="min-h-0 flex-1 overflow-auto">
-        <section className="border-b border-line px-5 py-5">
+        <section className="border-b border-line px-6 py-6">
           <h2 className="mb-1 font-medium">Mailboxes</h2>
-          <p className="mb-3 text-muted">
+          <p className="mb-3.5 text-muted">
             {boxes.length} configured, {capacity} sends a day at full capacity.{' '}
             {isConfigured()
               ? 'Gmail credentials are set — sends are real.'
               : 'No Gmail credentials, so sending runs as a dry run and records what it would have sent.'}
           </p>
-          <div className="max-w-2xl rounded-xl border border-line">
+          <div className="max-w-2xl overflow-hidden rounded-xl border border-line">
             {boxes.map((box) => (
               <div
                 key={box.id}
-                className="flex items-center gap-3 border-b border-line px-3.5 py-2.5 last:border-b-0"
+                className="flex items-center gap-3 border-b border-line px-4 py-3 last:border-b-0"
               >
                 <span className="flex-1 truncate font-medium">{box.email}</span>
                 <span className="text-muted">{box.dailyCap}/day</span>
@@ -41,25 +36,25 @@ export default async function SettingsPage() {
               </div>
             ))}
             {boxes.length === 0 && (
-              <p className="px-3.5 py-3 text-muted">
+              <p className="px-4 py-3 text-muted">
                 None yet — <code className="font-mono">npm run db:seed</code> adds the first two.
               </p>
             )}
           </div>
-          <p className="mt-2 text-muted">
+          <p className="mt-2.5 text-muted">
             Before any of this sends for real: SPF, DKIM and DMARC on the sending domain, then a
             two to three week warm-up from about five a day up to the cap.
           </p>
         </section>
 
-        <section className="px-5 py-5">
+        <section className="px-6 py-6">
           <h2 className="mb-1 font-medium">Suppressions</h2>
-          <p className="mb-3 text-muted">
+          <p className="mb-3.5 text-muted">
             {blocks.length} entries. Addresses are stored as a hash, so a person can be erased and
             still never be emailed. There is no way to remove one.
           </p>
 
-          <form action={blockDomain} className="mb-3 flex flex-wrap items-center gap-2">
+          <form action={blockDomain} className="mb-3.5 flex flex-wrap items-center gap-2">
             <input
               name="domain"
               placeholder="competitor.com"
@@ -74,11 +69,11 @@ export default async function SettingsPage() {
             <button className={button}>Block whole domain</button>
           </form>
 
-          <div className="max-w-2xl rounded-xl border border-line">
+          <div className="max-w-2xl overflow-hidden rounded-xl border border-line">
             {blocks.map((row) => (
               <div
                 key={row.id}
-                className="flex items-center gap-3 border-b border-line px-3.5 py-2 last:border-b-0"
+                className="flex items-center gap-3 border-b border-line px-4 py-2.5 last:border-b-0"
               >
                 <span className="flex-1 truncate">
                   {row.domain ? (
@@ -94,10 +89,10 @@ export default async function SettingsPage() {
                 </Pill>
               </div>
             ))}
-            {blocks.length === 0 && <p className="px-3.5 py-3 text-muted">Nothing suppressed yet.</p>}
+            {blocks.length === 0 && <p className="px-4 py-3 text-muted">Nothing suppressed yet.</p>}
           </div>
         </section>
       </div>
-    </>
+    </Screen>
   )
 }

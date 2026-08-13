@@ -52,7 +52,7 @@ export function Search({ placeholder = 'Search name, company or email' }) {
         onChange={(e) => setValue(e.target.value)}
         placeholder={placeholder}
         aria-label={placeholder}
-        className="w-full rounded-lg border border-line bg-faint py-1.5 pl-8 pr-3 placeholder:text-muted focus:bg-surface"
+        className="w-full rounded-lg border border-line bg-raised py-2 pl-8 pr-3 transition-colors placeholder:text-muted focus:border-accent/40"
       />
     </div>
   )
@@ -76,13 +76,15 @@ export function Filter({
       value={value}
       aria-label={label}
       onChange={(e) => write({ [name]: e.target.value || undefined })}
-      className={`rounded-lg border border-line py-1.5 pl-2.5 pr-7 transition-colors ${
-        value ? 'bg-ink text-white' : 'bg-faint text-muted hover:text-ink'
+      // An applied filter is a state, not an action — it inverts rather than
+      // going lime, so it never competes with the one forward button on screen.
+      className={`rounded-lg border border-line py-2 pl-2.5 pr-7 transition-colors ${
+        value ? 'border-ink bg-ink text-canvas' : 'bg-raised text-muted hover:text-ink'
       }`}
     >
       <option value="">{label}</option>
       {options.map((option) => (
-        <option key={option} value={option} className="bg-surface text-ink">
+        <option key={option} value={option}>
           {option.replace('_', ' ')}
         </option>
       ))}
@@ -96,7 +98,7 @@ export function ClearFilters({ active }: { active: boolean }) {
   return (
     <button
       onClick={() => write({ q: undefined, status: undefined, consent: undefined })}
-      className="rounded-lg px-2 py-1.5 text-muted underline-offset-2 hover:text-ink hover:underline"
+      className="rounded-lg px-2 py-2 text-muted underline-offset-2 transition-colors hover:text-ink hover:underline"
     >
       Clear
     </button>

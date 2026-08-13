@@ -6,6 +6,7 @@ import { Fragment, useState } from 'react'
 import type { ImportCounts } from '@/lib/contacts'
 import { FIELDS, type Mapping, type Row } from '@/lib/csv'
 import { importRows } from './actions'
+import { accent, ghost } from './ui'
 
 export default function Importer() {
   const router = useRouter()
@@ -70,7 +71,7 @@ export default function Importer() {
         {result.errors.length > 0 && (
           <div>
             <p className="mb-1 font-medium">Why rows were rejected</p>
-            <pre className="max-h-40 overflow-auto rounded-xl border border-line bg-faint p-3 text-[12px]">
+            <pre className="max-h-40 overflow-auto rounded-xl border border-line bg-canvas/60 p-3 text-[12px]">
               {result.errors.join('\n')}
             </pre>
           </div>
@@ -85,7 +86,7 @@ export default function Importer() {
             setHeaders([])
             setFileName('')
           }}
-          className="rounded-lg border border-line px-3 py-1.5 font-medium hover:bg-faint"
+          className={ghost}
         >
           Import another file
         </button>
@@ -95,7 +96,7 @@ export default function Importer() {
 
   return (
     <div className="space-y-5">
-      <label className="block cursor-pointer rounded-xl border border-dashed border-line bg-faint px-4 py-8 text-center transition-colors hover:border-ink/25">
+      <label className="block cursor-pointer rounded-xl border border-dashed border-line bg-raised/50 px-4 py-8 text-center transition-colors hover:border-accent/40">
         <input type="file" accept=".csv,text/csv" onChange={onFile} className="sr-only" />
         <span className="font-medium">{fileName || 'Choose a CSV file'}</span>
         <span className="mt-0.5 block text-muted">
@@ -125,7 +126,7 @@ export default function Importer() {
                     onChange={(e) =>
                       setMapping({ ...mapping, [field]: e.target.value || undefined })
                     }
-                    className="rounded-lg border border-line bg-faint px-2 py-1.5"
+                    className="rounded-lg border border-line bg-raised px-2 py-1.5"
                   >
                     <option value="">— not mapped —</option>
                     {headers.map((header) => (
@@ -144,7 +145,7 @@ export default function Importer() {
             <div className="overflow-x-auto rounded-xl border border-line">
               <table className="w-full border-collapse whitespace-nowrap text-[12px]">
                 <thead>
-                  <tr className="bg-faint">
+                  <tr className="bg-raised">
                     {headers.map((header) => (
                       <th
                         key={header}
@@ -179,7 +180,7 @@ export default function Importer() {
             <button
               onClick={run}
               disabled={!ready || busy}
-              className="rounded-lg bg-ink px-3.5 py-1.5 font-medium text-white transition-opacity hover:opacity-85 disabled:opacity-30"
+              className={accent}
             >
               {busy ? 'Importing…' : `Import ${rows.length} rows`}
             </button>

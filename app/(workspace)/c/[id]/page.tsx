@@ -13,7 +13,7 @@ import {
   saveCampaignAction,
   startSending,
 } from '../../actions'
-import { button, field, ghost, Pill, Step } from '../../ui'
+import { accent, button, field, ghost, Pill, Screen, Step } from '../../ui'
 
 const WHY: Record<string, string> = {
   ungrounded: 'mentions something we have no record of for this contact',
@@ -38,17 +38,17 @@ export default async function CampaignPage({ params }: PageProps<'/c/[id]'>) {
   const hasSlot = campaign.bodyTemplate.includes(`{{${SLOT}}}`)
 
   return (
-    <>
-      <header className="flex items-center justify-between gap-3 border-b border-line px-5 py-3.5">
-        <div className="flex items-baseline gap-3">
-          <Link href="/" className="text-muted hover:text-ink">
+    <Screen
+      title={
+        <span className="flex items-baseline gap-3">
+          <Link href="/" aria-label="Back to campaigns" className="text-muted hover:text-ink">
             ←
           </Link>
-          <h1 className="text-[15px] font-semibold tracking-tight">{campaign.name}</h1>
+          {campaign.name}
           <Pill>{campaign.status}</Pill>
-        </div>
-      </header>
-
+        </span>
+      }
+    >
       <div className="min-h-0 flex-1 overflow-auto">
         <Step n={1} title="Message">
           <form action={saveCampaignAction} className="max-w-2xl space-y-3">
@@ -77,7 +77,7 @@ export default async function CampaignPage({ params }: PageProps<'/c/[id]'>) {
               />
             </label>
             {!hasSlot && (
-              <p className="text-amber-700">
+              <p className="text-[#FFC65C]">
                 The body has no {`{{${SLOT}}}`}, so there is nothing for the model to write.
               </p>
             )}
@@ -116,7 +116,7 @@ export default async function CampaignPage({ params }: PageProps<'/c/[id]'>) {
           ) : (
             <form action={generateAction} className="flex items-center gap-3">
               <input type="hidden" name="id" value={campaign.id} />
-              <button className={button} disabled={!hasSlot}>
+              <button className={accent} disabled={!hasSlot}>
                 Write the next {Math.min(audience, 25)} drafts
               </button>
               <span className="text-muted">
@@ -156,8 +156,11 @@ export default async function CampaignPage({ params }: PageProps<'/c/[id]'>) {
               )}
 
               {queue.map(({ message, contact }) => (
-                <article key={message.id} className="rounded-xl border border-line">
-                  <div className="flex flex-wrap items-center gap-2 border-b border-line px-3.5 py-2">
+                <article
+                  key={message.id}
+                  className="overflow-hidden rounded-xl border border-line bg-surface/60"
+                >
+                  <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2.5">
                     <span className="font-medium">
                       {[contact.firstName, contact.lastName].filter(Boolean).join(' ') || 'Unnamed'}
                     </span>
@@ -173,7 +176,7 @@ export default async function CampaignPage({ params }: PageProps<'/c/[id]'>) {
                     </span>
                   </div>
                   {message.validatorFlags.length > 0 && (
-                    <ul className="border-b border-line bg-amber-50/40 px-3.5 py-2 text-amber-800">
+                    <ul className="border-b border-line bg-[#FFB62B]/[0.07] px-4 py-2 text-[#FFC65C]">
                       {message.validatorFlags.map((flag) => (
                         <li key={flag}>
                           <strong className="font-medium">{flag}</strong> — {WHY[flag] ?? flag}
@@ -182,20 +185,24 @@ export default async function CampaignPage({ params }: PageProps<'/c/[id]'>) {
                     </ul>
                   )}
                   {message.error ? (
-                    <p className="px-3.5 py-2 text-rose-700">{message.error}</p>
+                    <p className="px-4 py-2 text-[#FF8F8F]">{message.error}</p>
                   ) : (
                     <>
-                      <p className="border-b border-line px-3.5 py-2">
+                      <p className="border-b border-line px-4 py-2">
                         <span className="text-muted">Subject: </span>
                         {message.subject}
                       </p>
-                      <pre className="whitespace-pre-wrap px-3.5 py-3 font-sans">{message.body}</pre>
+                      {/* The message is the only thing on this screen that a real
+                          person will ever read. Everything else defers to it. */}
+                      <pre className="whitespace-pre-wrap px-4 py-3.5 font-sans text-[14px] leading-[1.6]">
+                        {message.body}
+                      </pre>
                     </>
                   )}
-                  <div className="flex gap-2 border-t border-line px-3.5 py-2">
+                  <div className="flex gap-2 border-t border-line px-4 py-2.5">
                     <form action={approve}>
                       <input type="hidden" name="id" value={message.id} />
-                      <button className={button} disabled={Boolean(message.error)}>
+                      <button className={accent} disabled={Boolean(message.error)}>
                         Approve
                       </button>
                     </form>
@@ -210,11 +217,7 @@ export default async function CampaignPage({ params }: PageProps<'/c/[id]'>) {
           )}
         </Step>
 
-        <Step
-          n={4}
-          title="Send"
-          note={`${tally.approved} approved · ${tally.sent} sent`}
-        >
+        <Step n={4} title="Send" note={`${tally.approved} approved · ${tally.sent} sent`}>
           <div className="space-y-3">
             <p className="text-muted">
               {active.length} active {active.length === 1 ? 'mailbox' : 'mailboxes'}, up to{' '}
@@ -233,7 +236,7 @@ export default async function CampaignPage({ params }: PageProps<'/c/[id]'>) {
             ) : (
               <form action={startSending} className="flex items-center gap-3">
                 <input type="hidden" name="id" value={campaign.id} />
-                <button className={button} disabled={tally.approved === 0}>
+                <button className={accent} disabled={tally.approved === 0}>
                   Start sending
                 </button>
                 {tally.approved === 0 && <span className="text-muted">Nothing approved yet.</span>}
@@ -253,6 +256,6 @@ export default async function CampaignPage({ params }: PageProps<'/c/[id]'>) {
           </div>
         </Step>
       </div>
-    </>
+    </Screen>
   )
 }

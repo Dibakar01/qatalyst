@@ -4,7 +4,7 @@ import { getContact, listContacts } from '@/lib/contacts'
 import { erase, saveStatus, suppressEmail, suppressSelected } from '../actions'
 import Importer from '../importer'
 import { ClearFilters, Filter, Search } from '../toolbar'
-import { button, field, ghost, Pill } from '../ui'
+import { accent, button, danger, field, ghost, Pill, Screen } from '../ui'
 
 const LIMIT = 100
 const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? ''
@@ -33,29 +33,29 @@ export default async function ContactsPage({ searchParams }: PageProps<'/contact
   const filtered = Boolean(q || status || consent)
 
   return (
-    <>
-      <header className="flex items-center justify-between gap-3 border-b border-line px-5 py-3.5">
-        <div>
-          <h1 className="text-[15px] font-semibold tracking-tight">Contacts</h1>
-          <p className="text-muted">
-            {list.total.toLocaleString()} {filtered ? 'matching' : 'on the list'}
-            {list.total > LIMIT && ` — showing the first ${LIMIT}`}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+    <Screen
+      title="Contacts"
+      note={
+        <>
+          {list.total.toLocaleString()} {filtered ? 'matching' : 'on the list'}
+          {list.total > LIMIT && ` — showing the first ${LIMIT}`}
+        </>
+      }
+      actions={
+        <div className="flex shrink-0 items-center gap-2">
           <a
             href={`/api/export?${new URLSearchParams({ ...(q && { q }), ...(status && { status }), ...(consent && { consent }) })}`}
             className={ghost}
           >
             Export CSV
           </a>
-          <Link href={href({ panel: 'import', contact: undefined })} className={button}>
+          <Link href={href({ panel: 'import', contact: undefined })} className={accent}>
             Import CSV
           </Link>
         </div>
-      </header>
-
-      <div className="flex flex-wrap items-center gap-2 border-b border-line px-5 py-2.5">
+      }
+    >
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-6 py-3">
         <Search />
         <Filter name="status" label="Email status" options={emailStatus.enumValues} />
         <Filter name="consent" label="Consent" options={consentStatus.enumValues} />
@@ -77,14 +77,14 @@ export default async function ContactsPage({ searchParams }: PageProps<'/contact
             {list.rows.map((contact) => (
               <div
                 key={contact.id}
-                className="flex items-center gap-3 border-b border-line px-5 py-2.5 hover:bg-faint"
+                className="flex items-center gap-3 border-b border-line px-6 py-3 transition-colors hover:bg-raised/50"
               >
                 <input
                   type="checkbox"
                   name="ids"
                   value={contact.id}
                   aria-label={`Select ${contact.email ?? contact.id}`}
-                  className="size-3.5 shrink-0 accent-ink"
+                  className="size-3.5 shrink-0 accent-accent"
                 />
                 <Link href={href({ contact: contact.id })} className="flex min-w-0 flex-1 gap-3">
                   <span className="w-48 shrink-0 truncate font-medium">
@@ -104,7 +104,7 @@ export default async function ContactsPage({ searchParams }: PageProps<'/contact
           </div>
 
           {/* Appears only when something is ticked — a CSS :has() rule, no state. */}
-          <div className="hidden items-center gap-3 border-t border-line bg-faint px-5 py-2.5 group-has-[input:checked]:flex">
+          <div className="hidden shrink-0 items-center gap-3 border-t border-line bg-raised px-6 py-3 group-has-[input:checked]:flex">
             <button className={button}>Add selected to suppression</button>
             <span className="text-muted">Permanent. They can never be emailed again.</span>
           </div>
@@ -140,7 +140,7 @@ export default async function ContactsPage({ searchParams }: PageProps<'/contact
             </dl>
 
             {!selected.erasedAt && (
-              <form action={saveStatus} className="space-y-2 rounded-xl border border-line p-3">
+              <form action={saveStatus} className="space-y-2 rounded-xl border border-line p-3.5">
                 <input type="hidden" name="id" value={selected.id} />
                 <p className="font-medium">Sending eligibility</p>
                 <p className="text-muted">
@@ -181,7 +181,7 @@ export default async function ContactsPage({ searchParams }: PageProps<'/contact
                 Everything the CSV carried beyond the fields above. Personalisation may use only
                 what is in here.
               </p>
-              <pre className="max-h-56 overflow-auto rounded-xl border border-line bg-faint p-3 text-[12px]">
+              <pre className="max-h-56 overflow-auto rounded-xl border border-line bg-canvas/60 p-3 text-[12px]">
                 {JSON.stringify(selected.context, null, 2)}
               </pre>
             </div>
@@ -196,9 +196,7 @@ export default async function ContactsPage({ searchParams }: PageProps<'/contact
               {!selected.erasedAt && (
                 <form action={erase}>
                   <input type="hidden" name="id" value={selected.id} />
-                  <button className="rounded-lg border border-rose-200 px-3 py-1.5 font-medium text-rose-700 hover:bg-rose-50">
-                    Erase personal data
-                  </button>
+                  <button className={danger}>Erase personal data</button>
                 </form>
               )}
             </div>
@@ -209,7 +207,7 @@ export default async function ContactsPage({ searchParams }: PageProps<'/contact
           </div>
         </Drawer>
       )}
-    </>
+    </Screen>
   )
 }
 
@@ -222,6 +220,7 @@ function Row({ label, value }: { label: string; value: string | null | undefined
   )
 }
 
+/** The third and last plane. Nothing stacks above this. */
 function Drawer({
   title,
   closeHref,
@@ -235,23 +234,23 @@ function Drawer({
 }) {
   return (
     <div className="fixed inset-0 z-40">
-      <Link href={closeHref} aria-label="Close" className="veil-in absolute inset-0 bg-ink/15" />
+      <Link href={closeHref} aria-label="Close" className="veil-in absolute inset-0 bg-canvas/70" />
       <div
-        className={`panel-in absolute right-0 top-0 flex h-full w-full flex-col border-l border-line bg-surface shadow-[0_0_60px_rgba(0,0,0,0.12)] ${
+        className={`panel-in absolute right-0 top-0 flex h-full w-full flex-col border-l border-line bg-surface shadow-[0_0_80px_rgba(0,0,0,0.7)] ${
           wide ? 'max-w-3xl' : 'max-w-lg'
         }`}
       >
-        <div className="flex items-center justify-between border-b border-line px-5 py-3.5">
-          <h2 className="text-[15px] font-semibold tracking-tight">{title}</h2>
+        <div className="flex items-center justify-between border-b border-line px-6 py-4">
+          <h2 className="text-[15px] font-semibold tracking-[-0.01em]">{title}</h2>
           <Link
             href={closeHref}
             aria-label="Close"
-            className="grid size-7 place-items-center rounded-lg text-muted hover:bg-faint hover:text-ink"
+            className="grid size-7 place-items-center rounded-lg text-muted transition-colors hover:bg-raised hover:text-ink"
           >
             ✕
           </Link>
         </div>
-        <div className="min-h-0 flex-1 overflow-auto px-5 py-4">{children}</div>
+        <div className="min-h-0 flex-1 overflow-auto px-6 py-5">{children}</div>
       </div>
     </div>
   )

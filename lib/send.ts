@@ -17,6 +17,41 @@ const localDay = (now: Date) =>
 
 export type TickResult = { sent: number; halted: string[]; dryRun: boolean; detail: string[] }
 
+export type MailboxStats = {
+  sentToday: number
+  catchAllToday: number
+  sentEver: number
+  bouncedEver: number
+}
+
+/**
+ * Everything the rules need to know about one mailbox at one moment. The sender
+ * asks before each tick; the control centre asks to show the same numbers on
+ * screen. One definition, so what you are looking at is exactly what the sender
+ * will act on rather than a second opinion that drifts.
+ */
+export async function mailboxStats(mailboxId: string, now = new Date()): Promise<MailboxStats> {
+  const [row] = await db
+    .select({
+      sentToday: raw<number>`count(*) filter (
+        where ${messages.sentAt}::date = ${localDay(now)}::date and ${messages.status} = 'sent'
+      )`.mapWith(Number),
+      catchAllToday: raw<number>`count(*) filter (
+        where ${messages.sentAt}::date = ${localDay(now)}::date
+          and ${messages.status} = 'sent'
+          and ${contacts.emailStatus} = 'catch_all'
+      )`.mapWith(Number),
+      sentEver: raw<number>`count(*) filter (where ${messages.status} = 'sent')`.mapWith(Number),
+      bouncedEver: raw<number>`count(*) filter (where ${messages.status} = 'bounced')`.mapWith(
+        Number,
+      ),
+    })
+    .from(messages)
+    .innerJoin(contacts, eq(contacts.id, messages.contactId))
+    .where(eq(messages.mailboxId, mailboxId))
+  return row
+}
+
 /**
  * One pass of the sender. Call it on a timer; it decides what is allowed to go
  * out right now and sends at most that. Every path through here checks
@@ -30,24 +65,7 @@ export async function sendTick(now = new Date()): Promise<TickResult> {
   const suppressed = await suppressionIndex()
 
   for (const mailbox of boxes) {
-    const [counts] = await db
-      .select({
-        sentToday: raw<number>`count(*) filter (
-          where ${messages.sentAt}::date = ${localDay(now)}::date and ${messages.status} = 'sent'
-        )`.mapWith(Number),
-        catchAllToday: raw<number>`count(*) filter (
-          where ${messages.sentAt}::date = ${localDay(now)}::date
-            and ${messages.status} = 'sent'
-            and ${contacts.emailStatus} = 'catch_all'
-        )`.mapWith(Number),
-        sentEver: raw<number>`count(*) filter (where ${messages.status} = 'sent')`.mapWith(Number),
-        bouncedEver: raw<number>`count(*) filter (where ${messages.status} = 'bounced')`.mapWith(
-          Number,
-        ),
-      })
-      .from(messages)
-      .innerJoin(contacts, eq(contacts.id, messages.contactId))
-      .where(eq(messages.mailboxId, mailbox.id))
+    const counts = await mailboxStats(mailbox.id, now)
 
     if (shouldHalt(counts.sentEver, counts.bouncedEver)) {
       // Halt only the campaigns that actually sent through this mailbox.

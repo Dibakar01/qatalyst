@@ -18,19 +18,16 @@ export default async function Login({ searchParams }: PageProps<'/login'>) {
   }
 
   return (
-    <main className="grid min-h-screen place-items-center p-6">
-      <form
-        action={login}
-        className="w-full max-w-[19rem] rounded-2xl border border-line bg-surface p-6"
-      >
+    <main className="grid min-h-dvh place-items-center p-6">
+      <form action={login} className="shell w-full max-w-[20rem] rounded-[20px] p-7">
         <div className="flex items-center gap-2.5">
-          <span className="grid size-7 place-items-center rounded-lg bg-ink text-[11px] font-semibold text-white">
+          <span className="grid size-7 place-items-center rounded-lg bg-accent text-[11px] font-bold text-canvas">
             Q
           </span>
-          <span className="text-[13px] font-semibold tracking-[0.14em]">QATALYST</span>
+          <span className="text-[12.5px] font-semibold tracking-[0.16em]">QATALYST</span>
         </div>
 
-        <label htmlFor="password" className="mt-6 block text-muted">
+        <label htmlFor="password" className="mt-7 block text-muted">
           Password
         </label>
         <input
@@ -39,11 +36,11 @@ export default async function Login({ searchParams }: PageProps<'/login'>) {
           type="password"
           autoFocus
           autoComplete="current-password"
-          className="mt-1 w-full rounded-lg border border-line bg-faint px-2.5 py-2 focus:bg-surface"
+          className="mt-1.5 w-full rounded-lg border border-line bg-raised px-2.5 py-2 transition-colors focus:border-accent/40"
         />
-        {e ? <p className="mt-2 text-rose-700">That password is not right.</p> : null}
+        {e ? <p className="mt-2 text-[#FF8F8F]">That password is not right.</p> : null}
 
-        <button className="mt-4 w-full rounded-lg bg-ink py-2 font-medium text-white transition-opacity hover:opacity-85">
+        <button className="mt-4 w-full rounded-lg bg-accent py-2 font-medium text-canvas transition-[filter] hover:brightness-110">
           Sign in
         </button>
       </form>
