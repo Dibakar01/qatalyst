@@ -39,7 +39,7 @@ export function Stamp({ children, tone }: { children: string; tone?: string }) {
 /** Small struck label. The only typographic ornament in the app. */
 export function Label({ children }: { children: React.ReactNode }) {
   return (
-    <p className="text-[9.5px] font-medium uppercase tracking-[0.16em] text-dim">{children}</p>
+    <p className="text-micro font-medium uppercase tracking-[0.16em] text-dim">{children}</p>
   )
 }
 
@@ -63,10 +63,10 @@ export function Sheet({
 }) {
   return (
     <section className="panel grain relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[10px]">
-      <header className="flex shrink-0 items-end justify-between gap-4 border-b border-line px-7 pb-4 pt-6">
+      <header className="flex shrink-0 items-end justify-between gap-4 border-b border-line p-6">
         <div className="min-w-0">
           <Label>{label}</Label>
-          <h1 className="mt-1.5 truncate text-[25px] font-medium leading-[1.1] tracking-[-0.028em]">
+          <h1 className="mt-1.5 truncate text-title font-medium leading-[1.1] tracking-[-0.028em]">
             {title}
           </h1>
           {note ? <p className="mt-1 text-dim">{note}</p> : null}
@@ -92,35 +92,68 @@ export function Ledger({ children }: { children: React.ReactNode }) {
 /** How many rows fit a panel. A page size is a decision, so it is written down. */
 export const ROWS = 12
 
-/** Where you are in a run of four, and a way to jump. */
+/**
+ * The franking bars, in HTML.
+ *
+ * Drawn from the same `frankingCode()` the shader uses, so a row in the list
+ * and the envelope on the stage are recognisably the same letter. Bars hang
+ * from a common baseline, tall or short by one bit each — identical geometry
+ * to the GL version, twelve bars, 45% duty.
+ */
+export function Franking({ code, className = 'h-2.5 w-9' }: { code: number; className?: string }) {
+  return (
+    <svg viewBox="0 0 36 10" className={`${className} shrink-0`} aria-hidden preserveAspectRatio="none">
+      {Array.from({ length: 12 }, (_, i) => {
+        const tall = ((code >> i) & 1) === 1
+        const height = tall ? 10 : 5.5
+        return (
+          <rect key={i} x={i * 3} y={10 - height} width={1.4} height={height} fill="currentColor" />
+        )
+      })}
+    </svg>
+  )
+}
+
+export type StepState = 'done' | 'now' | 'todo'
+
+/**
+ * How far along the letter is, and where you are in it.
+ *
+ * It guides rather than locks — every step stays clickable — but the shape
+ * tells you at a glance what is behind you and what is left.
+ */
 export function Stepper({
-  at,
   steps,
   href,
 }: {
-  at: number
-  steps: readonly string[]
+  steps: readonly { name: string; state: StepState }[]
   href: (step: number) => string
 }) {
   return (
-    <nav className="flex shrink-0 items-center gap-1 border-t border-line px-7 py-3">
-      {steps.map((name, index) => {
-        const n = index + 1
-        const on = n === at
-        return (
-          <Link
-            key={name}
-            href={href(n)}
-            aria-current={on ? 'step' : undefined}
-            className={`flex items-center gap-2 rounded-[5px] px-2.5 py-1.5 transition-colors ${
-              on ? 'bg-primary text-secondary' : 'text-dim hover:bg-raise hover:text-ink'
+    <nav className="flex shrink-0 items-center gap-1 border-t border-line px-6 py-3">
+      {steps.map(({ name, state }, index) => (
+        <Link
+          key={name}
+          href={href(index + 1)}
+          aria-current={state === 'now' ? 'step' : undefined}
+          className={`group flex flex-1 items-center gap-2 rounded-[6px] px-3 py-2 transition-colors ${
+            state === 'now' ? 'bg-primary text-secondary' : 'text-dim hover:bg-raise hover:text-ink'
+          }`}
+        >
+          <span
+            className={`grid size-4 shrink-0 place-items-center rounded-full text-micro tabular-nums ${
+              state === 'now'
+                ? 'bg-secondary text-primary'
+                : state === 'done'
+                  ? 'bg-ink text-ground'
+                  : 'border border-current'
             }`}
           >
-            <span className="text-[10px] tabular-nums opacity-70">{n}</span>
-            {name}
-          </Link>
-        )
-      })}
+            {state === 'done' ? '✓' : index + 1}
+          </span>
+          <span className="truncate">{name}</span>
+        </Link>
+      ))}
     </nav>
   )
 }
@@ -138,10 +171,10 @@ export function Pager({
   note?: React.ReactNode
 }) {
   const arrow =
-    'rounded-[5px] border border-line px-2.5 py-1 transition-colors hover:border-ink/40 hover:bg-raise'
-  const dead = 'rounded-[5px] border border-line/60 px-2.5 py-1 text-dim/40'
+    'rounded-[5px] border border-line px-3 py-2 transition-colors hover:border-ink/40 hover:bg-raise'
+  const dead = 'rounded-[5px] border border-line/60 px-3 py-2 text-dim/40'
   return (
-    <div className="flex shrink-0 items-center gap-3 border-t border-line px-7 py-2.5">
+    <div className="flex shrink-0 items-center gap-3 border-t border-line px-6 py-3">
       {note ? <span className="min-w-0 flex-1 truncate text-dim">{note}</span> : <span className="flex-1" />}
       <span className="text-dim tabular-nums">
         {page} of {pages}
@@ -166,9 +199,9 @@ export function Pager({
 
 export function Empty({ title, note }: { title: string; note: React.ReactNode }) {
   return (
-    <div className="grid flex-1 place-items-center px-7 py-16 text-center">
+    <div className="grid flex-1 place-items-center p-6 text-center">
       <div className="max-w-sm">
-        <p className="text-[18px] font-medium tracking-[-0.02em]">{title}</p>
+        <p className="text-title font-medium tracking-[-0.02em]">{title}</p>
         <p className="mt-1.5 text-dim">{note}</p>
       </div>
     </div>
@@ -197,10 +230,10 @@ export function Drawer({
           wide ? 'max-w-3xl' : 'max-w-lg'
         }`}
       >
-        <div className="flex shrink-0 items-end justify-between border-b border-line px-7 pb-4 pt-6">
+        <div className="flex shrink-0 items-end justify-between border-b border-line p-6">
           <div>
             <Label>{label}</Label>
-            <h2 className="mt-1.5 text-[20px] font-medium leading-tight tracking-[-0.025em]">
+            <h2 className="mt-1.5 text-title font-medium leading-tight tracking-[-0.025em]">
               {title}
             </h2>
           </div>
@@ -212,7 +245,7 @@ export function Drawer({
             ✕
           </Link>
         </div>
-        <div className="quiet-scroll min-h-0 flex-1 px-7 py-6">{children}</div>
+        <div className="quiet-scroll min-h-0 flex-1 p-6">{children}</div>
       </div>
     </div>
   )
@@ -222,22 +255,31 @@ export function Drawer({
    Exactly one red button on a surface: the thing that surface is for. */
 
 export const go =
-  'inline-flex items-center justify-center rounded-[5px] bg-primary px-4 py-2 font-medium text-secondary transition-[filter,opacity] hover:brightness-110 disabled:opacity-30 disabled:hover:brightness-100'
+  'inline-flex items-center justify-center rounded-[5px] bg-primary px-3 py-2 font-medium text-secondary transition-[filter,opacity] hover:brightness-110 disabled:opacity-30 disabled:hover:brightness-100'
+
+/**
+ * The same forward action, sized for a strip rather than a surface.
+ *
+ * A real variant, because the alternative was an `!important` override on `go`
+ * at the one call site that needed it — which is how a scale stops being one.
+ */
+export const small =
+  'inline-flex shrink-0 items-center justify-center rounded-full bg-primary px-3 py-2 font-medium text-secondary transition-[filter] hover:brightness-110'
 
 /** Commit what is on screen. Never red — a save is not a forward action. */
 export const ink =
-  'inline-flex items-center justify-center rounded-[5px] bg-ink px-4 py-2 font-medium text-ground transition-opacity hover:opacity-85 disabled:opacity-25'
+  'inline-flex items-center justify-center rounded-[5px] bg-ink px-3 py-2 font-medium text-ground transition-opacity hover:opacity-85 disabled:opacity-25'
 
 export const quiet =
-  'inline-flex items-center justify-center rounded-[5px] border border-line px-4 py-2 font-medium transition-colors hover:border-ink/40 hover:bg-raise'
+  'inline-flex items-center justify-center rounded-[5px] border border-line px-3 py-2 font-medium transition-colors hover:border-ink/40 hover:bg-raise'
 
 /** Destructive. Outlined rather than filled, so it can never be the fast path. */
 export const stop =
-  'inline-flex items-center justify-center rounded-[5px] border border-primary/40 px-4 py-2 font-medium text-primary transition-colors hover:bg-primary/[0.07]'
+  'inline-flex items-center justify-center rounded-[5px] border border-primary/40 px-3 py-2 font-medium text-primary transition-colors hover:bg-primary/[0.07]'
 
 export const field =
-  'w-full rounded-[4px] border border-line bg-raise px-2.5 py-2 transition-colors placeholder:text-dim/70 focus:border-primary'
+  'w-full rounded-[4px] border border-line bg-raise px-3 py-2 transition-colors placeholder:text-dim/70 focus:border-primary'
 
 /** A line ruled under an entry, rather than a box drawn around it. */
 export const ruled =
-  'w-full border-0 border-b border-line bg-transparent px-0 py-1.5 transition-colors placeholder:text-dim/70 focus:border-primary'
+  'w-full border-0 border-b border-line bg-transparent px-0 py-2 transition-colors placeholder:text-dim/70 focus:border-primary'

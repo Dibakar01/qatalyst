@@ -62,16 +62,16 @@ export default function Importer() {
         </p>
         <dl className="divide-y divide-line rounded-[5px] border border-line">
           {lines.map(([label, value]) => (
-            <div key={label} className="flex items-baseline justify-between px-4 py-3">
+            <div key={label} className="flex items-baseline justify-between px-3 py-2">
               <dt className={value === 0 ? 'text-dim' : ''}>{label}</dt>
-              <dd className="text-[20px] font-medium leading-none tracking-[-0.03em]">{value}</dd>
+              <dd className="text-title font-medium leading-none tracking-[-0.03em]">{value}</dd>
             </div>
           ))}
         </dl>
         {result.errors.length > 0 && (
           <div>
             <p className="mb-1.5 font-medium">Why rows were rejected</p>
-            <pre className="quiet-scroll max-h-40 rounded-[5px] border border-line bg-raise p-3 text-[11.5px]">
+            <pre className="quiet-scroll max-h-40 rounded-[5px] border border-line bg-raise p-3 text-small">
               {result.errors.join('\n')}
             </pre>
           </div>
@@ -97,9 +97,9 @@ export default function Importer() {
 
   return (
     <div className="space-y-6">
-      <label className="block cursor-pointer rounded-[5px] border border-dashed border-line bg-raise px-4 py-10 text-center transition-colors hover:border-primary hover:bg-raise">
+      <label className="block cursor-pointer rounded-[5px] border border-dashed border-line bg-raise p-6 text-center transition-colors hover:border-primary hover:bg-raise">
         <input type="file" accept=".csv,text/csv" onChange={onFile} className="sr-only" />
-        <span className="block text-[17px] font-medium tracking-[-0.02em]">{fileName || 'Choose a CSV file'}</span>
+        <span className="block text-title font-medium tracking-[-0.02em]">{fileName || 'Choose a CSV file'}</span>
         <span className="mt-1 block text-dim">
           {rows.length > 0
             ? `${rows.length} rows, ${headers.length} columns`
@@ -120,7 +120,7 @@ export default function Importer() {
                 <Fragment key={name}>
                   <label
                     htmlFor={`map-${name}`}
-                    className="text-[9.5px] uppercase tracking-[0.16em] text-dim"
+                    className="text-micro uppercase tracking-[0.16em] text-dim"
                   >
                     {name}
                   </label>
@@ -128,7 +128,7 @@ export default function Importer() {
                     id={`map-${name}`}
                     value={mapping[name] ?? ''}
                     onChange={(e) => setMapping({ ...mapping, [name]: e.target.value || undefined })}
-                    className="rounded-[5px] border border-line bg-raise px-2 py-1.5"
+                    className="rounded-[5px] border border-line bg-raise px-3 py-2"
                   >
                     <option value="">— not mapped —</option>
                     {headers.map((header) => (
@@ -147,14 +147,14 @@ export default function Importer() {
             <p className="mb-2.5 text-dim">
               If this is not the person you expect, the mapping above is wrong.
             </p>
-            <dl className="grid grid-cols-[7rem_1fr] gap-y-1 rounded-[5px] border border-line px-4 py-3">
+            <dl className="grid grid-cols-[7rem_1fr] gap-y-1 rounded-[5px] border border-line px-3 py-2">
               {FIELDS.filter((name) => mapping[name]).map((name) => (
                 <Fragment key={name}>
-                  <dt className="text-[9.5px] uppercase tracking-[0.16em] text-dim">{name}</dt>
+                  <dt className="text-micro uppercase tracking-[0.16em] text-dim">{name}</dt>
                   <dd className="truncate">{rows[0]?.[mapping[name]!] || '—'}</dd>
                 </Fragment>
               ))}
-              <dt className="text-[9.5px] uppercase tracking-[0.16em] text-dim">context</dt>
+              <dt className="text-micro uppercase tracking-[0.16em] text-dim">context</dt>
               <dd className="truncate text-dim">
                 {headers.filter((h) => !claimed.has(h)).join(', ') || 'nothing left over'}
               </dd>

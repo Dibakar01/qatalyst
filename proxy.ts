@@ -19,6 +19,8 @@ export function proxy(req: NextRequest) {
   return NextResponse.next()
 }
 
+// The brand mark has to be reachable without a session, or the sign-in page
+// has no favicon — the browser asks for it before anyone has logged in.
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+  matcher: ['/((?!_next/static|_next/image|icon\\.png|apple-icon\\.png|mark\\.png).*)'],
 }

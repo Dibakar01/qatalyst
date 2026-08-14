@@ -25,6 +25,22 @@
   --color-primary: #d92819;
   --color-secondary: #ffffff;
 
+  /* ── Type: five sizes, one job each ────────────────────────────────────
+     There were eighteen. Sizes only mean something if there are few enough
+     to tell apart, so if something seems to want a sixth, the layout is
+     wrong before the CSS is. */
+  --text-micro: 10px;      /* struck labels, stamps, tabular meta */
+  --text-small: 12px;      /* secondary and meta text */
+  --text-body: 13.5px;     /* anything you actually read */
+  --text-title: 20px;      /* the name of a surface */
+  --text-display: 30px;    /* the one big number on a surface */
+
+  --text-micro--line-height: 1.4;
+  --text-small--line-height: 1.45;
+  --text-body--line-height: 1.5;
+  --text-title--line-height: 1.15;
+  --text-display--line-height: 1;
+
   --font-sans: "Helvetica Neue", Helvetica, Arial, "Nimbus Sans", sans-serif;
 }
 
@@ -70,6 +86,18 @@
    steps, the reading goes one letter at a time. Locking overflow here is what
    makes that a rule rather than an intention — anything that overflows is a
    bug you can see, not a scrollbar you can live with. */
+/* ── Space: one 4px rhythm, and only these five steps ──────────────────────
+
+     2  →  8px   a control and its own label
+     3  →  12px  controls beside each other
+     5  →  20px  between sections inside a surface
+     6  →  24px  a surface's inner padding — all four sides
+     8  →  32px  between groups in the strip
+
+   Padding is never asymmetric. A surface is inset 24px on every side or it is
+   a mistake; `pt-6 pb-4` is how a layout stops lining up with itself. There
+   were ten horizontal and twenty vertical padding values before this rule. */
+
 html,
 body {
   height: 100%;

@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNotNull, isNull, notInArray, sql as raw } from 'drizzle-orm'
 import { db } from '../db/index.ts'
-import { campaigns, contacts, messages, type Campaign } from '../db/schema.ts'
+import { campaigns, contacts, messages, type Campaign, type Message } from '../db/schema.ts'
 import { SENDABLE } from './contacts.ts'
 
 const tally = {
@@ -95,6 +95,56 @@ export async function sentMessages(campaignId: string, limit = 50) {
     .where(and(eq(messages.campaignId, campaignId), eq(messages.status, 'sent')))
     .orderBy(desc(messages.sentAt))
     .limit(limit)
+}
+
+/** Statuses that mean the message has left. Phase 4 adds to this, not beside it. */
+export const GONE: Message['status'][] = ['sent', 'bounced', 'replied']
+
+/**
+ * Everything that has actually gone out, across every campaign.
+ *
+ * Keyed off the message status rather than a `sent` boolean, so when replies
+ * and bounces start arriving they land on this same surface instead of needing
+ * their own. Returns the same shape as listContacts() so the pager it feeds
+ * needs to know nothing about it.
+ */
+export async function sentLog({
+  q = '',
+  page = 1,
+  size = 12,
+}: {
+  q?: string
+  page?: number
+  size?: number
+}) {
+  const where = and(
+    inArray(messages.status, GONE),
+    q
+      ? raw`(${contacts.email} ilike ${'%' + q + '%'}
+          or ${contacts.company} ilike ${'%' + q + '%'}
+          or ${campaigns.name} ilike ${'%' + q + '%'})`
+      : undefined,
+  )
+
+  const [rows, [{ total }]] = await Promise.all([
+    db
+      .select({ message: messages, contact: contacts, campaign: campaigns })
+      .from(messages)
+      .innerJoin(contacts, eq(contacts.id, messages.contactId))
+      .innerJoin(campaigns, eq(campaigns.id, messages.campaignId))
+      .where(where)
+      .orderBy(desc(messages.sentAt))
+      .limit(size)
+      .offset((Math.max(page, 1) - 1) * size),
+    db
+      .select({ total: raw<number>`count(*)`.mapWith(Number) })
+      .from(messages)
+      .innerJoin(contacts, eq(contacts.id, messages.contactId))
+      .innerJoin(campaigns, eq(campaigns.id, messages.campaignId))
+      .where(where),
+  ])
+
+  return { rows, total, page: Math.max(page, 1), pages: Math.max(Math.ceil(total / size), 1) }
 }
 
 export const approveMessage = (id: string) =>

@@ -47,6 +47,7 @@ export function CommandBar({
   listed?: boolean
 }) {
   const router = useRouter()
+  const params = useSearchParams()
   const [text, setText] = useState('')
   const [log, setLog] = useState<string[]>([])
   const [pick, setPick] = useState(0)
@@ -164,6 +165,26 @@ export function CommandBar({
   const exact = commands.find((c) => c.name === head)
   const chosen = matches[Math.min(pick, Math.max(matches.length - 1, 0))]
 
+  // Typing something that is not a command turns the stack into the list,
+  // narrowed to what you typed. That is the whole point of the bar being where
+  // it is: you type, and the letters you can see become the ones you meant.
+  //
+  // The guard makes it converge — once the URL matches what is typed, nothing
+  // more is scheduled.
+  const finding = text.trim()
+  const already = listed && (params.get('find') ?? '') === finding
+  useEffect(() => {
+    if (matches.length > 0 || exact || already) return
+    // An empty bar on the stack is the resting state, not a search for nothing.
+    if (!finding && !listed) return
+    const timer = setTimeout(() => {
+      router.replace(finding ? `/?as=list&find=${encodeURIComponent(finding)}` : '/', {
+        scroll: false,
+      })
+    }, 250)
+    return () => clearTimeout(timer)
+  })
+
   // ⌘K from anywhere. There is one screen, so the shortcut cannot mean
   // something different somewhere else.
   useEffect(() => {
@@ -183,11 +204,12 @@ export function CommandBar({
     if (!trimmed || busy) return
 
     // A whole command, or enough of one to be unambiguous. Anything else is a
-    // search, because that is what a bare word usually means.
+    // search for a letter — which the effect above has already run; pressing
+    // enter just skips the wait. The text stays, because it is what the list
+    // is currently narrowed by.
     const cmd = exact ?? chosen
     if (!cmd) {
-      router.push(`/?view=book&q=${encodeURIComponent(trimmed)}`)
-      setText('')
+      router.push(`/?as=list&find=${encodeURIComponent(trimmed)}`)
       return
     }
     if (cmd.campaign && !campaignId) return say(`${cmd.name} acts on a letter — open one first`)
@@ -205,7 +227,7 @@ export function CommandBar({
   }
 
   return (
-    <div className="relative shrink-0 border-t border-line px-5 py-2.5">
+    <div className="relative shrink-0 border-t border-line px-6 py-3">
       {matches.length > 0 && (
         <ul className="panel absolute inset-x-5 bottom-full mb-2 overflow-hidden rounded-[6px]">
           {matches.map((cmd, index) => (
@@ -218,7 +240,7 @@ export function CommandBar({
                   setText(`${cmd.name} `)
                   box.current?.focus()
                 }}
-                className={`block w-full px-4 py-2 text-left text-[12px] transition-colors ${
+                className={`block w-full px-3 py-2 text-left text-small transition-colors ${
                   cmd === chosen ? 'bg-raise text-ink' : 'text-dim hover:text-ink'
                 }`}
               >
@@ -257,7 +279,7 @@ export function CommandBar({
         </div>
 
         <span
-          className={`shrink-0 text-[13px] ${busy ? 'animate-pulse text-ink' : 'text-dim'}`}
+          className={`shrink-0 text-body ${busy ? 'animate-pulse text-ink' : 'text-dim'}`}
           aria-hidden
         >
           {busy ? '•••' : '⌕'}
@@ -291,15 +313,15 @@ export function CommandBar({
           }}
           placeholder="Find a letter, or type a command"
           aria-label="Find a letter, or type a command"
-          className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-dim/80"
+          className="min-w-0 flex-1 bg-transparent text-small text-ink outline-none placeholder:text-dim/80"
         />
 
-        <kbd className="hidden shrink-0 rounded border border-line px-1.5 py-0.5 text-[10px] text-dim sm:block">
+        <kbd className="hidden shrink-0 rounded border border-line px-2 py-0.5 text-micro text-dim sm:block">
           ⌘K
         </kbd>
 
         {log.length > 0 && (
-          <p className="hidden min-w-0 max-w-[46%] truncate text-right text-[11px] text-dim md:block">
+          <p className="hidden min-w-0 max-w-[46%] truncate text-right text-small text-dim md:block">
             {log[0]}
           </p>
         )}
@@ -404,9 +426,9 @@ export function Valve({ boxes }: { boxes: Box[] }) {
   return (
     <div>
       <div className="flex items-baseline gap-2">
-        <span className="text-[26px] font-medium leading-none tracking-[-0.03em]">{owed}</span>
+        <span className="text-display font-medium leading-none tracking-[-0.03em]">{owed}</span>
         <span className="min-w-0 flex-1 text-dim">may go out now</span>
-        <span className="text-[11px] tabular-nums text-dim">{clock(minute)}</span>
+        <span className="text-small tabular-nums text-dim">{clock(minute)}</span>
       </div>
 
       <svg
@@ -471,6 +493,9 @@ function useParamWriter() {
       if (value) next.set(key, value)
       else next.delete(key)
     }
+    // Any change to the query puts you back on page one; page 3 of a brand new
+    // set of results reads as "my search found nothing".
+    next.delete('page')
     const qs = next.toString()
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
   }
@@ -507,7 +532,7 @@ export function Search({ placeholder = 'Search a name, company or address' }) {
         onChange={(event) => setValue(event.target.value)}
         placeholder={placeholder}
         aria-label={placeholder}
-        className="w-full border-0 border-b border-line bg-transparent py-1.5 pl-6 transition-colors placeholder:text-dim/70 focus:border-primary"
+        className="w-full border-0 border-b border-line bg-transparent py-2 pl-6 transition-colors placeholder:text-dim/70 focus:border-primary"
       />
     </div>
   )
@@ -533,7 +558,7 @@ export function Filter({
       onChange={(event) => write({ [name]: event.target.value || undefined })}
       // An applied filter is a state, not an action — it inverts to ink rather
       // than going blue, so it never competes with the one forward button.
-      className={`rounded-[3px] border py-1.5 pl-2 pr-7 capitalize transition-colors ${
+      className={`rounded-[3px] border py-2 pl-2 pr-7 capitalize transition-colors ${
         value ? 'border-ink bg-ink text-ground' : 'border-line bg-transparent text-dim hover:text-ink'
       }`}
     >
@@ -553,7 +578,7 @@ export function ClearFilters({ active }: { active: boolean }) {
   return (
     <button
       onClick={() => write({ q: undefined, status: undefined, consent: undefined })}
-      className="px-1 py-1.5 text-dim underline-offset-4 transition-colors hover:text-ink hover:underline"
+      className="px-2 py-2 text-dim underline-offset-4 transition-colors hover:text-ink hover:underline"
     >
       Clear
     </button>

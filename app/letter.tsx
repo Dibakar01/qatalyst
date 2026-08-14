@@ -250,7 +250,9 @@ const rgb = (value: string): [number, number, number] => {
 /** A three-quarter view: the face readable, the thickness visible. */
 const REST_YAW = -0.34
 const REST_PITCH = 0.16
-const SPACING = 2.35
+/** Vertical gap between letters. Roughly a letter and a half, so the one
+ *  behind is legible without crowding the one in front. */
+const SPACING = 1.45
 /** More than this either side of the front is behind the ones you can see. */
 const NEIGHBOURS = 3
 /** A press that moves less than this many pixels was a click, not a drag. */
@@ -277,6 +279,7 @@ export default function Letter({
   cards,
   openId,
   listed = false,
+  shift = 0,
   closeHref = '/',
 }: {
   cards: Card[]
@@ -284,6 +287,9 @@ export default function Letter({
   openId?: string
   /** The stack has been turned into a list, so it stands back out of the way. */
   listed?: boolean
+  /** Where the stack stands, in world units, so a panel can sit beside it
+   *  rather than on top of it. Eased, so the letters walk across. */
+  shift?: number
   closeHref?: string
 }) {
   const router = useRouter()
@@ -305,10 +311,10 @@ export default function Letter({
 
   // Everything the frame loop reads. Kept in a ref so new server data eases the
   // letters to their new state instead of tearing down the GL context.
-  const live = useRef({ cards, active, unfolded: Boolean(openId) || listed })
+  const live = useRef({ cards, active, unfolded: Boolean(openId) || listed, shift })
   useEffect(() => {
-    live.current = { cards, active, unfolded: Boolean(openId) || listed }
-  }, [cards, active, openId, listed])
+    live.current = { cards, active, unfolded: Boolean(openId) || listed, shift }
+  }, [cards, active, openId, listed, shift])
 
   const go = useRef<(to: 'open' | 'mark') => void>(() => {})
   useEffect(() => {
@@ -434,6 +440,7 @@ export default function Letter({
     let opened = 0
     let shown = live.current.active
     let unfold = live.current.unfolded ? 1 : 0
+    let placed = live.current.shift
 
     let dragging = false
     let hovering = false
@@ -476,23 +483,36 @@ export default function Letter({
     }
 
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'ArrowLeft') return step.current(-1)
-      if (event.key === 'ArrowRight') return step.current(1)
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        return step.current(-1)
+      }
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        return step.current(1)
+      }
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault()
         go.current('open')
       }
     }
 
-    // A trackpad flick sideways walks the stack. Locked briefly after each step
-    // so one gesture does not skip four letters.
+    // Up and down, never sideways.
+    //
+    // A two-finger horizontal swipe on macOS *is* the browser's back gesture,
+    // and preventDefault does not reliably win it — flicking through letters
+    // would navigate the history instead. Going vertical sidesteps that rather
+    // than fighting it, and a vertical stack is already a list, which is what
+    // the list view then shows you head-on.
+    //
+    // Locked briefly after each step so one flick does not skip four letters.
     const onWheel = (event: WheelEvent) => {
-      if (Math.abs(event.deltaX) < Math.abs(event.deltaY) || Math.abs(event.deltaX) < 8) return
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX) || Math.abs(event.deltaY) < 8) return
       event.preventDefault()
       const now = performance.now()
       if (now < wheelLock) return
-      wheelLock = now + 260
-      step.current(event.deltaX > 0 ? 1 : -1)
+      wheelLock = now + 240
+      step.current(event.deltaY > 0 ? 1 : -1)
     }
 
     const onEnter = () => (hovering = true)
@@ -520,10 +540,11 @@ export default function Letter({
     function draw(now: number) {
       const dt = Math.min((now - previous) / 16.667, 4)
       previous = now
-      const { cards: deck, active: want, unfolded } = live.current
+      const { cards: deck, active: want, unfolded, shift: wantShift } = live.current
 
       unfold = still ? (unfolded ? 1 : 0) : ease(unfold, unfolded ? 1 : 0, 0.09, dt)
       shown = still ? want : ease(shown, want, 0.12, dt)
+      placed = still ? wantShift : ease(placed, wantShift, 0.08, dt)
 
       if (dragging) {
         yaw += bankedYaw
@@ -557,7 +578,7 @@ export default function Letter({
       // Unfolding pushes the neighbours out of frame and brings the front one
       // square to the camera, so the panel arrives over an object already in
       // the right place.
-      const spacing = SPACING + unfold * 7
+      const spacing = SPACING + unfold * 4
       const back = 3.5 + unfold * 0.35
       const view = translation(0, 0, -back)
 
@@ -574,7 +595,7 @@ export default function Letter({
         // Behind the front one, and turned back to a common pose, so the stack
         // reads as a stack rather than a row of identical objects.
         const model = multiply(
-          translation(rel * spacing, 0, -Math.abs(rel) * 0.85),
+          translation(placed, -rel * spacing, -Math.abs(rel) * 0.85),
           multiply(rotationY(yaw * (1 - away) + REST_YAW * away), rotationX(pitch * (1 - away))),
         )
         const lid = opened * (1 - away)
@@ -618,9 +639,11 @@ export default function Letter({
             (normal[0] - model[12]) * (0 - world[0]) +
             (normal[1] - model[13]) * (0 - world[1]) +
             (normal[2] - model[14]) * (back - world[2])
+          // Nudged up and right of the stamp's centre, or the button covers
+          // the very mark it is pinned to.
           markScreen = {
-            x: (clip[0] / clip[3] / 2 + 0.5) * width,
-            y: (0.5 - clip[1] / clip[3] / 2) * height,
+            x: (clip[0] / clip[3] / 2 + 0.5) * width + 18,
+            y: (0.5 - clip[1] / clip[3] / 2) * height - 16,
             on: clip[3] > 0 && facing > 0 && unfold < 0.06,
           }
         }
@@ -685,7 +708,7 @@ export default function Letter({
         {here?.mark && (
           <button
             onClick={() => go.current('mark')}
-            className="whitespace-nowrap rounded-[4px] border border-secondary/60 bg-primary px-2.5 py-1.5 text-[10.5px] font-medium uppercase tracking-[0.12em] text-secondary shadow-[0_6px_20px_-6px_rgba(0,0,0,0.8)] transition-transform hover:scale-105"
+            className="whitespace-nowrap rounded-[4px] border border-secondary/60 bg-primary px-3 py-2 text-micro font-medium uppercase tracking-[0.12em] text-secondary shadow-[0_6px_20px_-6px_rgba(0,0,0,0.8)] transition-transform hover:scale-105"
           >
             {here.count > 0 ? `${here.count} · ${here.mark}` : here.mark}
           </button>
@@ -695,23 +718,34 @@ export default function Letter({
       {/* Which letter you are looking at. The bars on its face are what tells
           them apart at a glance; this is where you confirm which is which. */}
       {here?.name && (
-        <p className="pointer-events-none absolute inset-x-0 bottom-7 truncate px-6 text-center font-medium">
+        <p className="pointer-events-none absolute inset-x-0 bottom-0 truncate px-6 text-center font-medium">
           {here.name}
         </p>
       )}
 
+      {/* The scrubber runs down the right, because that is the axis the
+          letters move on. */}
       {cards.length > 1 && (
-        <div className="absolute inset-x-0 bottom-0 flex justify-center gap-1.5">
+        <div className="absolute right-3 top-1/2 flex -translate-y-1/2 flex-col">
           {cards.map((card, index) => (
             <button
               key={card.id}
               onClick={() => setActive(index)}
               aria-label={card.name}
               aria-current={index === active ? 'true' : undefined}
-              className={`h-1.5 rounded-full transition-all ${
-                index === active ? 'w-5 bg-primary' : 'w-1.5 bg-ink/25 hover:bg-ink/50'
-              }`}
-            />
+              // A 6px dot is not a target. The button is 24px wide and 16px
+              // tall with the dot painted inside it, so the thing you aim at is
+              // the thing that responds.
+              className="group grid h-4 w-6 shrink-0 place-items-center"
+            >
+              <span
+                className={`w-1.5 rounded-full transition-all ${
+                  index === active
+                    ? 'h-5 bg-primary'
+                    : 'h-1.5 bg-ink/25 group-hover:h-3 group-hover:bg-ink/60'
+                }`}
+              />
+            </button>
           ))}
         </div>
       )}

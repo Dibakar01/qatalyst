@@ -9,11 +9,12 @@ import {
   getCampaign,
   listCampaigns,
   reviewQueue,
+  sentLog,
   sentMessages,
 } from '@/lib/campaigns'
 import { contactStats, getContact, listContacts } from '@/lib/contacts'
 import { isConfigured } from '@/lib/gmail'
-import { nextAction, shouldHalt } from '@/lib/rules'
+import { frankingCode, nextAction, shouldHalt, type Next } from '@/lib/rules'
 import { mailboxStats } from '@/lib/send'
 import { SLOT } from '@/lib/template'
 import {
@@ -38,6 +39,7 @@ import {
   Drawer,
   Empty,
   field,
+  Franking,
   go,
   ink,
   Label,
@@ -45,9 +47,11 @@ import {
   Pager,
   quiet,
   ROWS,
+  small,
   ruled,
   Sheet,
   Stamp,
+  type StepState,
   Stepper,
   stop,
 } from './ui'
@@ -69,10 +73,21 @@ import {
  * panel, `?page=`/`?q=` walk a list.
  */
 
-const BOOK_VIEWS = new Set(['book', 'boxes', 'returned'])
-const STEPS = ['Message', 'Round', 'Reading', 'Post'] as const
+const BOOK_VIEWS = new Set(['book', 'boxes', 'returned', 'sent'])
+
+/** The four things you do to a letter, in the order you do them. */
+const STEPS = ['Write', 'Who', 'Review', 'Send'] as const
+
 /** Where the mark sends you: the step that has the button for what it asked. */
 const STEP_FOR = { draft: 2, read: 3, post: 4, hold: 4, none: 1 } as const
+
+/** What each stage is for, said once, at the top of it. */
+const ABOUT: Record<number, string> = {
+  1: 'One message, written once. The model writes a single line of it per person.',
+  2: 'Who it goes to, and drafting a batch for them.',
+  3: 'Read each draft and decide. Nothing sends until you do.',
+  4: 'Send it, at a rate that keeps the domain safe.',
+}
 
 const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? ''
 const num = (v: string | string[] | undefined, fallback = 1) => {
@@ -128,91 +143,151 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
       count: next.count,
       markHref: `/?c=${campaign.id}&step=${STEP_FOR[next.action]}`,
       href: `/?c=${campaign.id}`,
+      code: frankingCode(campaign.id),
     }
   })
 
+  // What each letter needs, kept beside the cards so the mark on the envelope
+  // and the inside of the letter are answering from the same function.
+  const guides = new Map(
+    rows.map((r, i) => [
+      r.campaign.id,
+      nextAction(
+        { drafts: r.drafts, flagged: r.flagged, approved: r.approved, sent: r.sent },
+        audiences[i],
+        r.campaign.status,
+      ),
+    ]),
+  )
+
+  const gone = rows.reduce((total, r) => total + r.sent, 0)
   const flagged = rows.reduce((total, r) => total + r.flagged, 0)
   const halted = boxes.filter((box) => box.halted)
-  const marked = rows.find((r) => r.flagged > 0)
-  const hasPanel = Boolean(openId) || BOOK_VIEWS.has(view)
+  const needsYou = rows.find((r) => r.flagged > 0)
+  const listed = one(sp.as) === 'list'
+  const making = one(sp.new) === '1'
+  const find = one(sp.find).trim().toLowerCase()
+  const hasPanel = Boolean(openId) || BOOK_VIEWS.has(view) || listed || making
 
   return (
     <>
-      {/* ── the strip: the readout, and the way to everything that is not a
-          letter. Red here always means something wants a person. ─────────── */}
-      <header className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1 border-b border-line px-5 py-2.5">
-        <Link href="/?view=boxes" className="transition-colors hover:text-primary">
-          <Postage boxes={boxes} />
+      {/* ── the strip ──────────────────────────────────────────────────────
+          One line, four zones, in the order you need them: what I can start,
+          what needs me, where things are, how the machine is. The middle group
+          is the navigation and it shows the open surface on every surface, so
+          you can always get anywhere and always know where you are. */}
+      <header className="flex shrink-0 flex-wrap items-center gap-x-8 gap-y-3 border-b border-line px-6 py-3">
+        <Link href="/?new=1" className={small} aria-label="Start a new letter">
+          + New letter
         </Link>
 
-        {flagged > 0 && marked ? (
+        {flagged > 0 && needsYou ? (
           <Link
-            href={`/?c=${marked.campaign.id}&step=3`}
+            href={`/?c=${needsYou.campaign.id}&step=3`}
             className="font-medium text-primary transition-opacity hover:opacity-75"
           >
-            {flagged} marked for you
+            {flagged} {flagged === 1 ? 'draft needs' : 'drafts need'} you
           </Link>
         ) : (
-          <span className="text-dim">nothing marked</span>
+          <span className="text-dim">nothing needs you</span>
         )}
 
-        <Link href="/?view=book" className="text-dim transition-colors hover:text-ink">
-          {contacts.total.toLocaleString()} addresses · {contacts.sendable.toLocaleString()} writable
-        </Link>
+        <nav className="flex items-center gap-1" aria-label="Where things are">
+          {(
+            [
+              ['/?as=list', 'Letters', rows.length, listed],
+              ['/?view=book', 'Contacts', contacts.total, view === 'book'],
+              ['/?view=sent', 'Sent', gone, view === 'sent'],
+              ['/?view=returned', 'Blocked', null, view === 'returned'],
+            ] as const
+          ).map(([href, label, n, on]) => (
+            <Link
+              key={label}
+              href={href}
+              aria-current={on ? 'page' : undefined}
+              className={`flex items-center gap-2 rounded-full px-3 py-2 transition-colors ${
+                on ? 'bg-raise text-ink' : 'text-dim hover:text-ink'
+              }`}
+            >
+              {label}
+              {n !== null && <span className="text-small tabular-nums opacity-60">{n.toLocaleString()}</span>}
+            </Link>
+          ))}
+        </nav>
 
-        <Link href="/?view=returned" className="text-dim transition-colors hover:text-ink">
-          returned
-        </Link>
-
-        <span className="ml-auto flex items-center gap-2 text-dim">
-          <span
-            className={`size-1.5 rounded-full ${isConfigured() ? 'bg-primary' : 'bg-dim'}`}
-            aria-hidden
-          />
-          {isConfigured() ? 'Gmail live' : 'Dry run'}
+        <span className="ml-auto flex items-center gap-8">
+          <Link href="/?view=boxes" className="text-dim transition-colors hover:text-ink">
+            <Postage boxes={boxes} />
+          </Link>
+          <span className="flex items-center gap-2 text-dim">
+            <span
+              className={`size-1.5 rounded-full ${isConfigured() ? 'bg-primary' : 'bg-dim'}`}
+              aria-hidden
+            />
+            {isConfigured() ? 'Gmail live' : 'Dry run'}
+          </span>
         </span>
 
         {halted.length > 0 && (
           <p className="w-full text-primary">
-            <strong className="font-medium">{halted[0].email} halted itself</strong> —{' '}
-            {(halted[0].bounceRate * 100).toFixed(1)}% came back, over the 3% threshold. Its letters
-            were held.
+            <strong className="font-medium">{halted[0].email} stopped itself</strong> —{' '}
+            {(halted[0].bounceRate * 100).toFixed(1)}% bounced, over the 3% threshold. Its letters
+            were paused.
           </p>
         )}
       </header>
 
       {/* ── the stage ────────────────────────────────────────────────────── */}
       <div className="relative min-h-0 flex-1">
-        <div className="absolute inset-0 px-6 pb-5 pt-2">
+        <div className="absolute inset-0 p-6">
           {cards.length === 0 ? (
             <div className="grid size-full place-items-center text-center">
               <div className="max-w-sm">
-                <p className="text-[18px] font-medium tracking-[-0.02em]">Nothing on the desk</p>
-                <p className="mt-1.5 text-dim">
+                <p className="text-title font-medium tracking-[-0.02em]">No letters yet</p>
+                <p className="mt-2 text-dim">
                   A letter is one message written once and personalised for each person on the list.
                 </p>
-                <form action={newCampaign} className="mt-5 flex items-end justify-center gap-2">
+                <form action={newCampaign} className="mt-5 flex items-end justify-center gap-3">
                   <label className="block">
                     <span className="sr-only">Name a new letter</span>
-                    <input name="name" placeholder="Name it" className={`${ruled} w-44`} />
+                    <input name="name" placeholder="Name it" className={`${ruled} w-44`} autoFocus />
                   </label>
                   <button className={go}>Start one</button>
                 </form>
               </div>
             </div>
           ) : (
-            <Letter cards={cards} openId={openId || undefined} />
+            <Letter
+              cards={cards}
+              openId={openId || undefined}
+              listed={listed || making}
+              // Steps aside for the panel rather than hiding behind it.
+              shift={hasPanel ? -1.15 : 0}
+            />
           )}
         </div>
 
         {hasPanel && (
           <ViewTransition enter="screen" exit="screen" default="none">
-            <div className="absolute inset-0 z-10 flex justify-center px-6 pb-5 pt-2">
-              <div className="flex min-h-0 w-full max-w-[900px] flex-col">
-                {openId ? (
-                  <LetterSheet id={openId} step={num(sp.step)} at={num(sp.m)} />
+            {/* Sits to the right on a wide window so the letter stays in view,
+                and takes the whole stage when there is not room for both. */}
+            <div className="absolute inset-0 z-10 flex justify-center p-6 xl:justify-end">
+              <div className="flex min-h-0 w-full max-w-[860px] flex-col">
+                {making ? (
+                  <NewLetterSheet />
+                ) : openId ? (
+                  <LetterSheet
+                    id={openId}
+                    step={sp.step ? num(sp.step) : STEP_FOR[guides.get(openId)?.action ?? 'none']}
+                    at={num(sp.m)}
+                    guide={guides.get(openId)}
+                  />
+                ) : listed ? (
+                  <ListSheet cards={cards} find={find} />
                 ) : view === 'book' ? (
                   <BookSheet sp={sp} />
+                ) : view === 'sent' ? (
+                  <SentSheet q={one(sp.q).trim()} page={num(sp.page)} />
                 ) : view === 'boxes' ? (
                   <BoxesSheet boxes={boxes} />
                 ) : (
@@ -224,10 +299,101 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
         )}
       </div>
 
-      <CommandBar campaignId={openId || undefined} campaignName={cards.find((c) => c.id === openId)?.name} />
+      <CommandBar
+        campaignId={openId || undefined}
+        campaignName={cards.find((c) => c.id === openId)?.name}
+        listed={listed}
+      />
 
       {BOOK_VIEWS.has(view) && <BookDrawers sp={sp} />}
     </>
+  )
+}
+
+/* ── the list, and starting a letter ──────────────────────────────────────── */
+
+/**
+ * The same letters, seen head-on.
+ *
+ * The stack is already vertical, so this is not another way of looking at the
+ * data — it is the same column with the perspective taken out. Each row carries
+ * the letter's own franking bars, which is how you match a row to the envelope
+ * you were just holding.
+ */
+function ListSheet({ cards, find }: { cards: Card[]; find: string }) {
+  const shown = find ? cards.filter((card) => card.name.toLowerCase().includes(find)) : cards
+
+  return (
+    <Sheet
+      label="Letters"
+      title={find ? `Letters matching “${find}”` : 'Every letter'}
+      note={`${shown.length} of ${cards.length}. Type in the bar below to narrow.`}
+      actions={
+        <>
+          <Link href="/?new=1" className={go}>
+            + New letter
+          </Link>
+          <Link href="/" className={quiet} aria-label="Back to the stack">
+            ✕
+          </Link>
+        </>
+      }
+    >
+      {shown.length === 0 ? (
+        <Empty title="Nothing matches" note="Clear what you typed to see them all." />
+      ) : (
+        <Ledger>
+          {shown.map((card) => (
+            <Link
+              key={card.id}
+              href={card.href}
+              className="flex items-center gap-4 border-b border-line px-6 py-3 transition-colors hover:bg-raise"
+            >
+              <span className="text-primary">
+                <Franking code={card.code} />
+              </span>
+              <span className="min-w-0 flex-1 truncate font-medium">{card.name}</span>
+              <span className="truncate text-dim">
+                {card.count > 0 ? `${card.count} · ${card.mark}` : card.mark}
+              </span>
+            </Link>
+          ))}
+        </Ledger>
+      )}
+    </Sheet>
+  )
+}
+
+function NewLetterSheet() {
+  return (
+    <Sheet
+      label="New letter"
+      title="What is this one called?"
+      note="Only for you — the people you write to never see it."
+      actions={
+        <Link href="/" className={quiet} aria-label="Cancel">
+          ✕
+        </Link>
+      }
+    >
+      <form action={newCampaign} className="flex flex-1 flex-col justify-center gap-5 px-6">
+        <label className="block">
+          <span className="sr-only">Name</span>
+          <input
+            name="name"
+            placeholder="Autumn outreach"
+            autoFocus
+            className="w-full border-0 border-b border-line bg-transparent pb-2 text-display font-medium tracking-[-0.03em] transition-colors placeholder:text-dim/50 focus:border-primary"
+          />
+        </label>
+        <div className="flex items-center gap-3">
+          <button className={go}>Start it</button>
+          <span className="text-dim">
+            You will land inside it, on the message. Nothing sends until you say so.
+          </span>
+        </div>
+      </form>
+    </Sheet>
   )
 }
 
@@ -238,7 +404,26 @@ const WHY: Record<string, string> = {
   thin: 'says nothing beyond their name, title and company',
 }
 
-async function LetterSheet({ id, step, at }: { id: string; step: number; at: number }) {
+/** The one thing this letter needs, said as a sentence rather than a stamp. */
+const HEADLINE: Record<Next['action'], (n: number) => string> = {
+  read: (n) => `${n} ${n === 1 ? 'draft is' : 'drafts are'} waiting to be read`,
+  hold: (n) => `Sending now — ${n} approved and going out`,
+  post: (n) => `${n} approved and ready to send`,
+  draft: (n) => `Ready to draft the next ${n}`,
+  none: () => 'Nothing to do on this letter',
+}
+
+async function LetterSheet({
+  id,
+  step,
+  at,
+  guide,
+}: {
+  id: string
+  step: number
+  at: number
+  guide?: Next
+}) {
   const campaign = await getCampaign(id)
   if (!campaign)
     return (
@@ -259,6 +444,7 @@ async function LetterSheet({ id, step, at }: { id: string; step: number; at: num
   const active = boxRows.filter((box) => box.active)
   const capacity = active.reduce((total, box) => total + box.dailyCap, 0)
   const hasSlot = campaign.bodyTemplate.includes(`{{${SLOT}}}`)
+  const written = tally.drafts + tally.flagged + tally.approved + tally.sent
   const step3 = (n: number) => `/?c=${id}&step=3&m=${n}`
 
   return (
@@ -276,7 +462,18 @@ async function LetterSheet({ id, step, at }: { id: string; step: number; at: num
         </Link>
       }
     >
-      <div className="min-h-0 flex-1 overflow-hidden px-7 py-6">
+      {/* What to do, before what there is to look at. The same nextAction()
+          that draws the mark on the envelope, so the two cannot disagree. */}
+      {guide && (
+        <div className="shrink-0 border-b border-line px-6 py-3">
+          <p className={`font-medium ${guide.action === 'read' ? 'text-primary' : ''}`}>
+            {HEADLINE[guide.action](guide.count)}
+          </p>
+          <p className="text-dim">{ABOUT[clause]}</p>
+        </div>
+      )}
+
+      <div className="min-h-0 flex-1 overflow-hidden p-6">
         {clause === 1 && (
           <form action={saveCampaignAction} className="flex h-full flex-col gap-4">
             <input type="hidden" name="id" value={campaign.id} />
@@ -302,7 +499,7 @@ async function LetterSheet({ id, step, at }: { id: string; step: number; at: num
                 name="body_template"
                 defaultValue={campaign.bodyTemplate}
                 spellCheck={false}
-                className="mt-1.5 min-h-0 w-full flex-1 resize-none rounded-[4px] border border-line bg-raise px-4 py-3 leading-[1.7] transition-colors focus:border-primary"
+                className="mt-1.5 min-h-0 w-full flex-1 resize-none rounded-[4px] border border-line bg-raise px-3 py-2 leading-[1.7] transition-colors focus:border-primary"
               />
             </label>
 
@@ -330,7 +527,7 @@ async function LetterSheet({ id, step, at }: { id: string; step: number; at: num
         {clause === 2 && (
           <div className="flex h-full flex-col justify-center gap-5 text-center">
             <div>
-              <p className="text-[34px] font-medium leading-none tracking-[-0.03em]">{audience}</p>
+              <p className="text-display font-medium leading-none tracking-[-0.03em]">{audience}</p>
               <p className="mt-2 text-dim">
                 {audience === 1 ? 'address' : 'addresses'} not yet written to
               </p>
@@ -369,7 +566,7 @@ async function LetterSheet({ id, step, at }: { id: string; step: number; at: num
                 ] as const
               ).map(([label, value]) => (
                 <div key={label}>
-                  <p className="text-[28px] font-medium leading-none tracking-[-0.03em]">{value}</p>
+                  <p className="text-display font-medium leading-none tracking-[-0.03em]">{value}</p>
                   <p className="mt-1 text-dim">{label}</p>
                 </div>
               ))}
@@ -400,7 +597,7 @@ async function LetterSheet({ id, step, at }: { id: string; step: number; at: num
             {posted.length > 0 && (
               <div className="min-h-0">
                 <Label>Last postmarks</Label>
-                <ul className="mt-2 space-y-1 text-[11.5px] tabular-nums text-dim">
+                <ul className="mt-2 space-y-1 text-small tabular-nums text-dim">
                   {posted.map(({ message, contact }) => (
                     <li key={message.id} className="truncate">
                       {message.sentAt?.toISOString().slice(0, 16).replace('T', ' ')} → {contact.email}
@@ -413,7 +610,19 @@ async function LetterSheet({ id, step, at }: { id: string; step: number; at: num
         )}
       </div>
 
-      <Stepper at={clause} steps={STEPS} href={(n) => `/?c=${id}&step=${n}`} />
+      <Stepper
+        steps={STEPS.map((name, index) => {
+          const n = index + 1
+          const done = [
+            hasSlot && campaign.prompt.trim().length > 0,
+            written > 0,
+            written > 0 && tally.drafts + tally.flagged === 0,
+            tally.sent > 0,
+          ][index]
+          return { name, state: (n === clause ? 'now' : done ? 'done' : 'todo') as StepState }
+        })}
+        href={(n) => `/?c=${id}&step=${n}`}
+      />
     </Sheet>
   )
 }
@@ -474,7 +683,7 @@ function Reading({
       </div>
 
       {message.validatorFlags.length > 0 && (
-        <ul className="shrink-0 rounded-[4px] border border-primary/35 bg-primary/[0.06] px-4 py-2.5 text-primary">
+        <ul className="shrink-0 rounded-[4px] border border-primary/35 bg-primary/[0.06] px-3 py-2 text-primary">
           {message.validatorFlags.map((flag) => (
             <li key={flag}>
               <strong className="font-medium">{flag}</strong> — {WHY[flag] ?? flag}
@@ -486,14 +695,14 @@ function Reading({
       {message.error ? (
         <p className="text-primary">{message.error}</p>
       ) : (
-        <div className="quiet-scroll min-h-0 flex-1 rounded-[4px] border border-line bg-raise px-5 py-4">
+        <div className="quiet-scroll min-h-0 flex-1 rounded-[4px] border border-line bg-raise p-6">
           <p className="mb-3 border-b border-line pb-2.5">
             <span className="text-dim">Subject </span>
             {message.subject}
           </p>
           {/* The only thing on this desk a real person will ever read.
               Everything else defers to it. */}
-          <pre className="whitespace-pre-wrap font-sans text-[13.5px] leading-[1.75]">
+          <pre className="whitespace-pre-wrap font-sans text-body leading-[1.75]">
             {message.body}
           </pre>
         </div>
@@ -581,7 +790,7 @@ async function BookSheet({ sp }: { sp: Params }) {
         </>
       }
     >
-      <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-line px-7 py-3">
+      <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-line px-6 py-3">
         <Search />
         <Filter name="status" label="Any address status" options={emailStatus.enumValues} />
         <Filter name="consent" label="Any consent" options={consentStatus.enumValues} />
@@ -599,7 +808,7 @@ async function BookSheet({ sp }: { sp: Params }) {
             {list.rows.map((contact) => (
               <div
                 key={contact.id}
-                className="flex items-center gap-3 border-b border-line px-7 py-2 transition-colors hover:bg-raise"
+                className="flex items-center gap-3 border-b border-line px-6 py-3 transition-colors hover:bg-raise"
               >
                 <input
                   type="checkbox"
@@ -625,7 +834,7 @@ async function BookSheet({ sp }: { sp: Params }) {
           </Ledger>
 
           {/* Appears only when something is ticked — a CSS :has() rule, no state. */}
-          <div className="hidden shrink-0 items-center gap-3 border-t border-line bg-raise px-7 py-2.5 group-has-[input:checked]:flex">
+          <div className="hidden shrink-0 items-center gap-3 border-t border-line bg-raise px-6 py-3 group-has-[input:checked]:flex">
             <button className={ink}>Return the selected</button>
             <span className="text-dim">Permanent. They can never be written to again.</span>
           </div>
@@ -721,7 +930,7 @@ async function BookDrawers({ sp }: { sp: Params }) {
 
             <div>
               <Label>What the CSV carried</Label>
-              <pre className="quiet-scroll mt-2 max-h-56 rounded-[4px] border border-line bg-raise p-3 text-[11.5px]">
+              <pre className="quiet-scroll mt-2 max-h-56 rounded-[4px] border border-line bg-raise p-3 text-small">
                 {JSON.stringify(selected.context, null, 2)}
               </pre>
             </div>
@@ -751,6 +960,78 @@ async function BookDrawers({ sp }: { sp: Params }) {
   )
 }
 
+/* ── everything that has gone ─────────────────────────────────────────────── */
+
+const when = (d: Date | null) =>
+  d
+    ? d.toLocaleString('en-GB', {
+        day: '2-digit',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : '—'
+
+/**
+ * One place for everything that has left, across every letter.
+ *
+ * Keyed off the message status rather than a boolean, so when phase 4 starts
+ * matching replies and bounces back to what we sent, they appear here without
+ * another surface having to exist.
+ */
+async function SentSheet({ q, page }: { q: string; page: number }) {
+  const log = await sentLog({ q, page, size: ROWS })
+  const href = (n: number) =>
+    `/?view=sent&page=${n}${q ? `&q=${encodeURIComponent(q)}` : ''}`
+
+  return (
+    <Sheet
+      label="Sent"
+      title="Everything that has gone"
+      note={`${log.total.toLocaleString()} ${log.total === 1 ? 'message' : 'messages'}${q ? ` matching “${q}”` : ''}, newest first.`}
+    >
+      <div className="flex shrink-0 items-center gap-3 border-b border-line px-6 py-3">
+        <Search placeholder="Search an address, company or letter" />
+      </div>
+
+      {log.rows.length === 0 ? (
+        <Empty
+          title={q ? 'Nothing matches' : 'Nothing has gone yet'}
+          note={
+            q
+              ? 'Clear the search to see everything that has gone.'
+              : 'Approve some drafts and put a letter in the post.'
+          }
+        />
+      ) : (
+        <Ledger>
+          {log.rows.map(({ message, contact, campaign }) => (
+            <div
+              key={message.id}
+              className="flex items-baseline gap-3 border-b border-line px-6 py-3"
+            >
+              <span className="w-28 shrink-0 text-small tabular-nums text-dim">
+                {when(message.sentAt)}
+              </span>
+              <span className="w-48 shrink-0 truncate">{contact.email}</span>
+              <span className="min-w-0 flex-1 truncate text-dim">{contact.company ?? '—'}</span>
+              <Link
+                href={`/?c=${campaign.id}`}
+                className="w-40 shrink-0 truncate text-dim underline-offset-4 hover:text-ink hover:underline"
+              >
+                {campaign.name}
+              </Link>
+              <Stamp tone={message.status}>{message.status}</Stamp>
+            </div>
+          ))}
+        </Ledger>
+      )}
+
+      {log.pages > 1 && <Pager page={log.page} pages={log.pages} href={href} />}
+    </Sheet>
+  )
+}
+
 /* ── the post boxes, and the returned register ────────────────────────────── */
 
 function BoxesSheet({ boxes }: { boxes: Box[] }) {
@@ -767,17 +1048,17 @@ function BoxesSheet({ boxes }: { boxes: Box[] }) {
         </Link>
       }
     >
-      <div className="min-h-0 flex-1 overflow-hidden px-7 py-5">
+      <div className="min-h-0 flex-1 overflow-hidden p-6">
         <Valve boxes={boxes} />
       </div>
       <Ledger>
         {boxes.map((box) => (
-          <div key={box.id} className="flex items-center gap-3 border-t border-line px-7 py-2.5">
+          <div key={box.id} className="flex items-center gap-3 border-t border-line px-6 py-3">
             <span className="min-w-0 flex-1 truncate font-medium">{box.email}</span>
             {box.sendsCatchAll && <Stamp tone="catch_all">catch all · 10/day</Stamp>}
             {box.halted && <Stamp tone="halted">halted</Stamp>}
             {!box.active && <Stamp tone="paused">paused</Stamp>}
-            <span className="w-24 shrink-0 text-right text-[11.5px] tabular-nums text-dim">
+            <span className="w-24 shrink-0 text-right text-small tabular-nums text-dim">
               {box.sentToday}/{box.cap} today
             </span>
           </div>
@@ -829,12 +1110,12 @@ async function ReturnedSheet({ page }: { page: number }) {
     >
       <Ledger>
         {blocks.map((row) => (
-          <div key={row.id} className="flex items-center gap-3 border-b border-line px-7 py-2">
+          <div key={row.id} className="flex items-center gap-3 border-b border-line px-6 py-3">
             <span className="min-w-0 flex-1 truncate">
               {row.domain ? (
                 <span className="font-medium">@{row.domain}</span>
               ) : (
-                <span className="text-[11.5px] text-dim">{row.emailHash?.slice(0, 32)}…</span>
+                <span className="text-small text-dim">{row.emailHash?.slice(0, 32)}…</span>
               )}
             </span>
             <Stamp tone={row.reason}>{row.reason}</Stamp>
@@ -859,7 +1140,7 @@ async function ReturnedSheet({ page }: { page: number }) {
 function Row({ label, value }: { label: string; value: string | null | undefined }) {
   return (
     <>
-      <dt className="text-[9.5px] uppercase tracking-[0.14em] text-dim">{label}</dt>
+      <dt className="text-micro uppercase tracking-[0.14em] text-dim">{label}</dt>
       <dd className="break-words">{value || '—'}</dd>
     </>
   )

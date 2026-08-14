@@ -32,36 +32,51 @@ in about 250 lines of raw WebGL2 (`app/letter.tsx`, matrices in `lib/mat4.ts`);
 a scene-graph library would be several hundred kilobytes to draw a box, a
 triangle and a plane.
 
-The letters stand in a stack — arrow keys, a sideways trackpad flick, or the
-dots underneath move through them. Each carries a **mark**: the stamp on its
-face, which says the one thing that letter needs next and takes you to where
-you do it. Marked drafts outrank everything, because that is the only state the
-machine cannot leave without a person. `nextAction()` in `lib/rules.ts` decides
-it, and is tested.
+The letters stand in a vertical stack — scroll up and down, arrow up and down,
+or the scrubber on the right moves through them. Vertical on purpose: a
+two-finger *horizontal* swipe on macOS is the browser's back gesture and cannot
+reliably be cancelled, so sideways navigation would send you out of the app.
+Going vertical sidesteps it and earns something — a vertical stack is already a
+list, which is exactly what the list view shows you head-on.
 
-Campaigns are **letters**, contacts are the **address book**, mailboxes are
-**post boxes**, and the suppression list is what came back **returned**. The
-strip along the top is both the readout and the way to all three. Clicking a
-letter unfolds it into four steps — the message, the round, the reading, the
-post.
+Each letter carries two marks. The **stamp** says the one thing that letter
+needs next and takes you to where you do it; flagged drafts outrank everything,
+because that is the only state the machine cannot leave without a person
+(`nextAction()` in `lib/rules.ts`, tested). The **franking bars** under the
+address are a hash of the campaign id (`frankingCode()`, also tested), so two
+letters never look alike — and the list draws the same bars in HTML, so a row
+and the envelope on the stage are recognisably the same thing.
+
+Opening a letter unfolds it into four steps — **Write, Who, Review, Send** — and
+it opens on the step it actually needs rather than always the first. The same
+`nextAction()` drives that and the stamp, so the object and its insides can
+never disagree.
 
 **Nothing scrolls.** A surface that does not fit is the wrong surface, so lists
-are paged, the campaign is stepped, and the reading goes one message at a time —
+are paged, the campaign is stepped, and the review goes one message at a time —
 which is how a stack of letters actually gets signed. `overflow: hidden` on the
 document makes that a rule rather than an intention: anything that overflows is
 a bug you can see instead of a scrollbar you can live with.
 
-Along the bottom is a command line. `⌘K` focuses it; anything it does not
-recognise is treated as a search of the address book.
+The strip along the top is the navigation, on every surface: what you can start,
+what needs you, **Letters · Contacts · Sent · Blocked**, and how the machine is.
+It marks the surface you are on, so you can always get anywhere and always know
+where you are. **Sent** is one place for everything that has left, across every
+letter — keyed off message status rather than a boolean, so when phase 4 starts
+matching replies and bounces they appear there without a new surface.
+
+The bar along the bottom switches **Stack / List** and finds letters — typing a
+name turns the stack into the list, narrowed. `⌘K` focuses it. A leading known
+verb runs as a command instead:
 
 ```
-new <name>   write [n]   sign   post   hold   collect
-find <text>  book        import suppress <email>   block <domain>
-boxes        returned    desk
+new <name>   write [n]   approve   send   pause   sendnow
+find <text>  contacts    import    suppress <email>   block <domain>
+senders      blocked     list      letters
 ```
 
-`write`, `sign`, `post` and `hold` act on the open letter and refuse to run
-without one. Everything a command does is also a button on the paper, and both
+`write`, `approve`, `send` and `pause` act on the open letter and refuse to run
+without one. Everything a command does is also a button on screen, and both
 post to the same server action.
 
 Two colours and nothing else: **#d92819** and **#ffffff**. With a palette that
@@ -134,7 +149,7 @@ so a backlog can never go out as a burst.
 
 | | |
 |---|---|
-| `npm test` | 19 pure-function checks — tokens, CSV mapping, templates, both validators, the sending rules. No database. |
+| `npm test` | 30 pure-function checks — tokens, CSV mapping, templates, both validators, the sending rules, what the stamp asks for, the franking hash, and the letter's matrices. No database. |
 | `npm run test:acceptance` | Phases 1–3 end to end. **Truncates tables**; refuses to run against anything but localhost. |
 | `npm run lint` / `npm run build` | |
 
