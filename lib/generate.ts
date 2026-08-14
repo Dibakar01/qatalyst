@@ -34,7 +34,7 @@ function facts(contact: Contact) {
 }
 
 /** One short generation. Returns the paragraph, or a reason it could not be written. */
-export async function personalise(campaign: Campaign, contact: Contact) {
+async function personalise(campaign: Campaign, contact: Contact) {
   const client = new Anthropic()
 
   const response = await client.beta.messages.create({

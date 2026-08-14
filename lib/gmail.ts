@@ -57,7 +57,7 @@ const encodeHeader = (value: string) =>
   /^[\x20-\x7e]*$/.test(value) ? value : `=?UTF-8?B?${Buffer.from(value).toString('base64')}?=`
 
 /** Plain text, always. No HTML part, no tracking pixel, no link rewriting. */
-export function mime(from: string, to: string, subject: string, body: string) {
+function mime(from: string, to: string, subject: string, body: string) {
   return [
     `From: ${encodeHeader(from)}`,
     `To: ${to}`,

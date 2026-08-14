@@ -280,7 +280,6 @@ export default function Letter({
   openId,
   listed = false,
   shift = 0,
-  closeHref = '/',
 }: {
   cards: Card[]
   /** The letter the URL says is unfolded, if any. */
@@ -290,7 +289,6 @@ export default function Letter({
   /** Where the stack stands, in world units, so a panel can sit beside it
    *  rather than on top of it. Eased, so the letters walk across. */
   shift?: number
-  closeHref?: string
 }) {
   const router = useRouter()
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -323,10 +321,11 @@ export default function Letter({
       if (!card) return
       // An empty target means this letter is not a way in — the sealed one on
       // the sign-in screen, which is there to be turned over and nothing else.
-      const target = to === 'mark' ? card.markHref : live.current.unfolded ? closeHref : card.href
+      // Unfolded, the letter itself is the way back out to the stack.
+      const target = to === 'mark' ? card.markHref : live.current.unfolded ? '/' : card.href
       if (target) router.push(target)
     }
-  }, [router, closeHref])
+  }, [router])
 
   const step = useRef<(by: number) => void>(() => {})
   useEffect(() => {

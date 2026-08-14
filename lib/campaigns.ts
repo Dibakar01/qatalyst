@@ -98,7 +98,7 @@ export async function sentMessages(campaignId: string, limit = 50) {
 }
 
 /** Statuses that mean the message has left. Phase 4 adds to this, not beside it. */
-export const GONE: Message['status'][] = ['sent', 'bounced', 'replied']
+const GONE: Message['status'][] = ['sent', 'bounced', 'replied']
 
 /**
  * Everything that has actually gone out, across every campaign.
