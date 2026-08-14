@@ -65,9 +65,16 @@
   color-scheme: dark;
 }
 
+/* Nothing on this desk scrolls.
+   A surface that does not fit is the wrong surface: lists page, the campaign
+   steps, the reading goes one letter at a time. Locking overflow here is what
+   makes that a rule rather than an intention — anything that overflows is a
+   bug you can see, not a scrollbar you can live with. */
 html,
 body {
   height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 body {
@@ -139,9 +146,25 @@ body {
   border-radius: 3px;
 }
 
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-line) transparent;
+/* Two places where the content is genuinely variable and clipping it would
+   hide something a person needs: the body of a message under review, and a
+   textarea someone is typing into. They reach, but without chrome — a bar is
+   what was asked to go, not the ability to see the end of a sentence. */
+.quiet-scroll {
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.quiet-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+textarea {
+  scrollbar-width: none;
+}
+
+textarea::-webkit-scrollbar {
+  display: none;
 }
 
 select option {

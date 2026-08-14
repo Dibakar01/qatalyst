@@ -8,7 +8,8 @@ const { makeToken, readToken } = await import('./token.ts')
 const { mapRow } = await import('./csv.ts')
 const { assembleBody, fill, missing, variables } = await import('./template.ts')
 const { validate, claims, ungrounded } = await import('./validators.ts')
-const { allowanceNow, batchSize, maySend, shouldHalt, WINDOW } = await import('./rules.ts')
+const { allowanceNow, batchSize, frankingCode, maySend, nextAction, shouldHalt, WINDOW } =
+  await import('./rules.ts')
 const mat4 = await import('./mat4.ts')
 
 const ada = {
@@ -203,6 +204,58 @@ test('a typed batch size can never run away with the model budget', () => {
   assert.equal(batchSize('500'), 100, 'the ceiling holds however big the ask')
 })
 
+/* telling one letter from another ----------------------------------------- */
+
+test('the franking bars are stable per letter and different between letters', () => {
+  const id = '7bfb60b1-d287-4602-b0dd-633b6db8737a'
+  assert.equal(frankingCode(id), frankingCode(id), 'the same letter is always struck the same')
+
+  // A code that collapses would make every envelope look alike, and nothing on
+  // screen would say so — the stack would just stop being readable.
+  const ids = Array.from({ length: 500 }, (_, i) => `campaign-${i}`)
+  const codes = new Set(ids.map(frankingCode))
+  assert.equal(codes.size, ids.length, 'no collisions across 500 letters')
+
+  // Neighbouring ids must not produce neighbouring bars, or a run of campaigns
+  // created together would all look the same.
+  assert.ok(Math.abs(frankingCode('campaign-1') - frankingCode('campaign-2')) > 1000)
+
+  for (const code of codes) {
+    assert.ok(Number.isInteger(code) && code >= 0 && code < 2 ** 24, 'survives the trip as a float')
+  }
+})
+
+/* what the mark on the letter says ---------------------------------------- */
+
+const tally = (patch: Partial<Record<'drafts' | 'flagged' | 'approved' | 'sent', number>> = {}) => ({
+  drafts: 0,
+  flagged: 0,
+  approved: 0,
+  sent: 0,
+  ...patch,
+})
+
+test('the mark asks for the earliest thing that is actually stuck', () => {
+  // A marked draft outranks everything: it is the only state that cannot move
+  // without a person, so a letter is never allowed to advertise anything else.
+  assert.equal(nextAction(tally({ flagged: 3, drafts: 9, approved: 40 }), 200, 'sending').action, 'read')
+  assert.equal(nextAction(tally({ flagged: 3 }), 0, 'draft').count, 3)
+
+  // Already posting needs nothing except a way to stop it.
+  assert.equal(nextAction(tally({ approved: 12 }), 50, 'sending').action, 'hold')
+
+  assert.equal(nextAction(tally({ drafts: 9, approved: 4 }), 50, 'ready').action, 'read')
+  assert.equal(nextAction(tally({ approved: 4 }), 50, 'ready').action, 'post')
+  assert.equal(nextAction(tally(), 50, 'draft').action, 'draft')
+})
+
+test('the mark never offers to draft more than one batch, or to draft nobody', () => {
+  assert.equal(nextAction(tally(), 400, 'draft').count, 25, 'a batch, not the whole audience')
+  assert.equal(nextAction(tally(), 7, 'draft').count, 7, 'or the whole audience when it is smaller')
+  assert.equal(nextAction(tally(), 0, 'draft').action, 'none', 'nobody left to write to')
+  assert.equal(nextAction(tally({ sent: 80 }), 0, 'done').label, 'all posted')
+})
+
 /* the letter's matrices --------------------------------------------------- */
 
 // Column-major, and multiply applies right to left. Both are easy to get
@@ -232,6 +285,31 @@ test('a quarter turn about y sends +x to -z', () => {
   // First column is where the x axis ends up. Right-handed, so it goes to -z.
   const m = mat4.rotationY(Math.PI / 2)
   close(m.slice(0, 4) as Float32Array, [0, 0, -1, 0], 'x axis')
+})
+
+test('a point through a matrix lands where the mark has to be pinned', () => {
+  close(
+    new Float32Array(mat4.transformPoint(mat4.identity(), 1, 2, 3)),
+    [1, 2, 3, 1],
+    'identity moves nothing',
+  )
+  close(
+    new Float32Array(mat4.transformPoint(mat4.translation(5, -1, 0), 1, 0, 0)),
+    [6, -1, 0, 1],
+    'translation is applied',
+  )
+})
+
+test('a point behind the camera reports w <= 0 rather than mirroring', () => {
+  // Dividing by a negative w would put the mark on the opposite side of the
+  // screen, which reads as the stamp jumping to the wrong corner. The sign of
+  // w is what lets the caller hide it instead.
+  const p = mat4.perspective(Math.PI / 4, 1, 0.1, 100)
+  assert.ok(mat4.transformPoint(p, 0, 0, -2)[3] > 0, 'in front of the camera')
+  assert.ok(mat4.transformPoint(p, 0, 0, 2)[3] <= 0, 'behind it')
+  const [x, y] = mat4.transformPoint(p, 0, 0, -2)
+  assert.equal(x, 0, 'a point on the axis projects to the centre')
+  assert.equal(y, 0)
 })
 
 test('perspective puts -1 in the w row, so w becomes the depth', () => {

@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useEffect, useRef, useState, useTransition } from 'react'
 import { allowanceNow, WINDOW } from '@/lib/rules'
@@ -13,7 +14,6 @@ import {
   startSending,
   suppressEmail,
 } from './actions'
-import { Stamp } from './ui'
 
 /* ── The command line ─────────────────────────────────────────────────────────
    Every button on the paper has a word here, and both post to the same server
@@ -39,9 +39,12 @@ const form = (entries: Record<string, string>) => {
 export function CommandBar({
   campaignId,
   campaignName,
+  listed = false,
 }: {
   campaignId?: string
   campaignName?: string
+  /** Whether the stack is currently shown as a list. */
+  listed?: boolean
 }) {
   const router = useRouter()
   const [text, setText] = useState('')
@@ -72,39 +75,39 @@ export function CommandBar({
       },
     },
     {
-      name: 'sign',
-      hint: 'sign — approve every draft that passed both readers',
+      name: 'approve',
+      hint: 'approve — approve every draft that passed both readers',
       campaign: true,
       run: async () => {
         await approveAllClean(form({ id: campaignId! }))
-        return `signed the clean drafts in ${here} — marked ones still need you`
+        return `approved the clean drafts in ${here} — flagged ones still need you`
       },
     },
     {
-      name: 'post',
-      hint: 'post — start sending this letter',
+      name: 'send',
+      hint: 'send — start sending this letter',
       campaign: true,
       run: async () => {
         await startSending(form({ id: campaignId! }))
-        return `${here} is in the post`
+        return `${here} is sending`
       },
     },
     {
-      name: 'hold',
-      hint: 'hold — stop sending this letter',
+      name: 'pause',
+      hint: 'pause — stop sending this letter',
       campaign: true,
       run: async () => {
         await pauseSending(form({ id: campaignId! }))
-        return `${here} is held`
+        return `${here} is paused`
       },
     },
     {
-      name: 'collect',
-      hint: 'collect — work one collection right now',
+      name: 'sendnow',
+      hint: 'sendnow — work one send right now, by hand',
       run: async () => {
         const tick = await sendNow()
         return [
-          `${tick.sent} posted${tick.dryRun ? ' (dry run)' : ''}`,
+          `${tick.sent} sent${tick.dryRun ? ' (dry run)' : ''}`,
           ...tick.halted.map((email) => `halted ${email}`),
           ...tick.detail,
         ]
@@ -114,47 +117,50 @@ export function CommandBar({
     },
     {
       name: 'find',
-      hint: 'find <text> — search the address book',
+      hint: 'find <text> — search contacts',
       needs: 'something to search for',
       run: (arg) => router.push(`/?view=book&q=${encodeURIComponent(arg)}`),
     },
-    { name: 'book', hint: 'book — the whole address book', run: () => router.push('/?view=book') },
+    { name: 'contacts', hint: 'contacts — everyone we may write to', run: () => router.push('/?view=book') },
     {
       name: 'import',
-      hint: 'import — take in a CSV of addresses',
+      hint: 'import — take in a CSV of contacts',
       run: () => router.push('/?view=book&panel=import'),
     },
     {
       name: 'suppress',
-      hint: 'suppress <email> — never write to this address again',
+      hint: 'suppress <email> — never send to this address again',
       needs: 'an address',
       run: async (arg) => {
         await suppressEmail(form({ email: arg }))
-        return `${arg} added to the returned register`
+        return `${arg} will never be sent to`
       },
     },
     {
       name: 'block',
-      hint: 'block <domain> — return everything from a whole domain',
+      hint: 'block <domain> — never send to a whole domain',
       needs: 'a domain',
       run: async (arg) => {
         await blockDomain(form({ domain: arg, reason: 'manual' }))
         return `@${arg.replace(/^@/, '')} blocked`
       },
     },
-    { name: 'boxes', hint: 'boxes — the post boxes we send from', run: () => router.push('/?view=boxes') },
+    { name: 'senders', hint: 'senders — the mailboxes we send from', run: () => router.push('/?view=boxes') },
     {
-      name: 'returned',
-      hint: 'returned — everyone we may never write to',
+      name: 'blocked',
+      hint: 'blocked — everyone we may never send to',
       run: () => router.push('/?view=returned'),
     },
-    { name: 'desk', hint: 'desk — back to the letters on the desk', run: () => router.push('/') },
+    { name: 'list', hint: 'list — every letter, as a list', run: () => router.push('/?as=list') },
+    { name: 'letters', hint: 'letters — back to the stack', run: () => router.push('/') },
   ]
 
   const [head = '', ...rest] = text.trim().split(/\s+/)
   const arg = rest.join(' ')
   const typing = rest.length === 0 && !text.endsWith(' ')
-  const matches = typing && head ? commands.filter((c) => c.name.startsWith(head)) : []
+  // Capped: the list pops upward out of a fixed bar, so it may never be taller
+  // than the room above it.
+  const matches = (typing && head ? commands.filter((c) => c.name.startsWith(head)) : []).slice(0, 6)
   const exact = commands.find((c) => c.name === head)
   const chosen = matches[Math.min(pick, Math.max(matches.length - 1, 0))]
 
@@ -223,13 +229,40 @@ export function CommandBar({
         </ul>
       )}
 
-      <div className="flex items-center gap-2.5">
+      <div className="flex items-center gap-3">
+        {/* What this bar is, before you type anything into it. The stack and the
+            list are the same letters — this says so, and switches between them. */}
+        <div
+          role="group"
+          aria-label="How to show the letters"
+          className="flex shrink-0 items-center rounded-full border border-line p-0.5"
+        >
+          {(
+            [
+              ['/', 'Stack', !listed],
+              ['/?as=list', 'List', listed],
+            ] as const
+          ).map(([href, label, on]) => (
+            <Link
+              key={label}
+              href={href}
+              aria-current={on ? 'true' : undefined}
+              className={`rounded-full px-3 py-1 transition-colors ${
+                on ? 'bg-primary text-secondary' : 'text-dim hover:text-ink'
+              }`}
+            >
+              {label}
+            </Link>
+          ))}
+        </div>
+
         <span
-          className={`text-[13px] ${busy ? 'animate-pulse text-ink' : 'text-dim'}`}
+          className={`shrink-0 text-[13px] ${busy ? 'animate-pulse text-ink' : 'text-dim'}`}
           aria-hidden
         >
-          {busy ? '•••' : '›'}
+          {busy ? '•••' : '⌕'}
         </span>
+
         <input
           ref={box}
           value={text}
@@ -256,10 +289,14 @@ export function CommandBar({
               setPick((n) => (n - 1 + matches.length) % matches.length)
             }
           }}
-          placeholder="write · sign · post · collect · find someone — or ⌘K"
-          aria-label="Command"
+          placeholder="Find a letter, or type a command"
+          aria-label="Find a letter, or type a command"
           className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-dim/80"
         />
+
+        <kbd className="hidden shrink-0 rounded border border-line px-1.5 py-0.5 text-[10px] text-dim sm:block">
+          ⌘K
+        </kbd>
 
         {log.length > 0 && (
           <p className="hidden min-w-0 max-w-[46%] truncate text-right text-[11px] text-dim md:block">
@@ -289,22 +326,13 @@ const clock = (m: number) =>
   `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
 
 /**
- * The one thing here you cannot work out by looking at a list.
+ * The clock, once, for everything that depends on it.
  *
- * Everything else — who is written to, what is signed, what went out — is a
- * count you can read off a page. The allowance is different: it is a function
- * of the clock. The day's postage is released evenly across the window, so
- * "how much may go out right now" changes every minute and is nothing outside
- * 09:00 to 17:00. Without this, an idle machine looks exactly like a broken one.
- *
- * The number comes from the same allowanceNow() the sender uses, so this is not
- * a second opinion about the rule — it is the rule, drawn.
+ * Rendered on the server too, where "now" is a different instant. Starting at
+ * null and filling in on mount keeps the markup identical on both sides.
  */
-export function Meter({ boxes }: { boxes: Box[] }) {
-  // Rendered on the server too, where "now" is a different instant. Starting at
-  // null and filling in on mount keeps the markup identical on both sides.
+function useMinute() {
   const [minute, setMinute] = useState<number | null>(null)
-
   useEffect(() => {
     const read = () => {
       const now = new Date()
@@ -314,14 +342,52 @@ export function Meter({ boxes }: { boxes: Box[] }) {
     const timer = setInterval(read, 30_000)
     return () => clearInterval(timer)
   }, [])
+  return minute
+}
 
+const owedNow = (boxes: Box[], minute: number) =>
+  boxes
+    .filter((box) => box.active && !box.halted)
+    .reduce((total, box) => total + allowanceNow(box.cap, box.sentToday, minute), 0)
+
+/**
+ * How much may go out this minute, in the strip.
+ *
+ * This is the one number on the desk you cannot work out by looking at a list.
+ * Everything else — who is written to, what is signed, what went out — is a
+ * count you can read off a page. The allowance is a function of the clock: the
+ * day's postage is released evenly across the window, so it changes every
+ * minute and is nothing outside 09:00 to 17:00. Without it an idle machine
+ * looks exactly like a broken one.
+ */
+export function Postage({ boxes }: { boxes: Box[] }) {
+  const minute = useMinute()
+  if (minute === null) return <span className="text-dim">— owed</span>
+
+  const owed = owedNow(boxes, minute)
+  const outside = minute < WINDOW.start || minute >= WINDOW.end
+  return (
+    <span className={owed > 0 ? 'text-ink' : 'text-dim'}>
+      <strong className="font-medium">{owed}</strong> owed
+      {outside && <span className="text-dim"> · outside the window</span>}
+    </span>
+  )
+}
+
+/**
+ * The same rule, drawn against the clock. The number comes from the same
+ * allowanceNow() the sender uses, so this is not a second opinion about the
+ * rule — it is the rule, with a shape.
+ */
+export function Valve({ boxes }: { boxes: Box[] }) {
+  const minute = useMinute()
   const live = boxes.filter((box) => box.active && !box.halted)
   const cap = live.reduce((total, box) => total + box.cap, 0)
   const sentToday = boxes.reduce((total, box) => total + box.sentToday, 0)
 
-  if (minute === null) return <div className="h-[150px] animate-pulse rounded-[4px] bg-raise" />
+  if (minute === null) return <div className="h-[132px] animate-pulse rounded-[4px] bg-raise" />
 
-  const owed = live.reduce((total, box) => total + allowanceNow(box.cap, box.sentToday, minute), 0)
+  const owed = owedNow(boxes, minute)
   const before = minute < WINDOW.start
   const after = minute >= WINDOW.end
   const outside = before || after
@@ -338,10 +404,8 @@ export function Meter({ boxes }: { boxes: Box[] }) {
   return (
     <div>
       <div className="flex items-baseline gap-2">
-        <span className="text-[30px] font-medium leading-none tracking-[-0.03em] text-ink">{owed}</span>
-        <span className="min-w-0 flex-1 leading-tight text-dim">
-          {owed === 1 ? 'may go out now' : 'may go out now'}
-        </span>
+        <span className="text-[26px] font-medium leading-none tracking-[-0.03em]">{owed}</span>
+        <span className="min-w-0 flex-1 text-dim">may go out now</span>
         <span className="text-[11px] tabular-nums text-dim">{clock(minute)}</span>
       </div>
 
@@ -362,13 +426,7 @@ export function Meter({ boxes }: { boxes: Box[] }) {
               stroke="var(--color-line)"
               strokeWidth="1"
             />
-            <text
-              x={m - WINDOW.start}
-              y={108}
-              fill="var(--color-dim)"
-              fontSize="11"
-              textAnchor="middle"
-            >
+            <text x={m - WINDOW.start} y={108} fill="var(--color-dim)" fontSize="11" textAnchor="middle">
               {clock(m)}
             </text>
           </g>
@@ -395,33 +453,6 @@ export function Meter({ boxes }: { boxes: Box[] }) {
           ? `Outside ${clock(WINDOW.start)}–${clock(WINDOW.end)}, so nothing may go out${before ? ' yet' : ' today'}. Waiting is the rule working.`
           : `${sentToday} of ${cap} posted today, released evenly across the window.`}
       </p>
-
-      <div className="mt-3.5 space-y-2">
-        {boxes.map((box) => {
-          const allowance =
-            box.active && !box.halted ? allowanceNow(box.cap, box.sentToday, minute) : 0
-          return (
-            <div key={box.id} className="flex items-center gap-2" title={box.email}>
-              <span className="min-w-0 flex-1 truncate text-ink">{box.email.split('@')[0]}</span>
-              {box.halted ? (
-                <Stamp tone="halted">halted</Stamp>
-              ) : !box.active ? (
-                <Stamp tone="paused">paused</Stamp>
-              ) : box.sendsCatchAll ? (
-                <Stamp tone="catch_all">catch all</Stamp>
-              ) : null}
-              <span className="text-[11px] tabular-nums text-dim">
-                {box.sentToday}/{box.cap}
-              </span>
-              <span
-                className={`w-7 text-right text-[11px] tabular-nums ${allowance > 0 ? 'text-primary' : 'text-dim/60'}`}
-              >
-                {allowance > 0 ? `+${allowance}` : '—'}
-              </span>
-            </div>
-          )
-        })}
-      </div>
     </div>
   )
 }

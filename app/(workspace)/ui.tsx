@@ -78,32 +78,90 @@ export function Sheet({
   )
 }
 
-/** One numbered clause. The number sits in the margin, as a printed form does. */
-export function Clause({
-  n,
-  title,
-  note,
-  children,
+/**
+ * Rows, and never more than fit.
+ *
+ * Nothing on this desk scrolls. A list that is longer than the space is paged,
+ * not scrolled — which means the page size has to be a decision rather than a
+ * consequence, and the row height below is that decision.
+ */
+export function Ledger({ children }: { children: React.ReactNode }) {
+  return <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+}
+
+/** How many rows fit a panel. A page size is a decision, so it is written down. */
+export const ROWS = 12
+
+/** Where you are in a run of four, and a way to jump. */
+export function Stepper({
+  at,
+  steps,
+  href,
 }: {
-  n: number
-  title: string
-  note?: React.ReactNode
-  children: React.ReactNode
+  at: number
+  steps: readonly string[]
+  href: (step: number) => string
 }) {
   return (
-    <section className="border-b border-line px-7 py-6 last:border-b-0">
-      <div className="mb-4 flex items-baseline gap-3">
-        <span className="w-4 shrink-0 text-[11px] tabular-nums text-dim">{n}</span>
-        <h2 className="text-[16px] font-medium tracking-[-0.02em]">{title}</h2>
-        {note ? <span className="text-dim">{note}</span> : null}
-      </div>
-      <div className="pl-7">{children}</div>
-    </section>
+    <nav className="flex shrink-0 items-center gap-1 border-t border-line px-7 py-3">
+      {steps.map((name, index) => {
+        const n = index + 1
+        const on = n === at
+        return (
+          <Link
+            key={name}
+            href={href(n)}
+            aria-current={on ? 'step' : undefined}
+            className={`flex items-center gap-2 rounded-[5px] px-2.5 py-1.5 transition-colors ${
+              on ? 'bg-primary text-secondary' : 'text-dim hover:bg-raise hover:text-ink'
+            }`}
+          >
+            <span className="text-[10px] tabular-nums opacity-70">{n}</span>
+            {name}
+          </Link>
+        )
+      })}
+    </nav>
   )
 }
 
-export function Ledger({ children }: { children: React.ReactNode }) {
-  return <div className="min-h-0 flex-1 overflow-auto">{children}</div>
+/** Prev and next through whatever the search matched. */
+export function Pager({
+  page,
+  pages,
+  href,
+  note,
+}: {
+  page: number
+  pages: number
+  href: (page: number) => string
+  note?: React.ReactNode
+}) {
+  const arrow =
+    'rounded-[5px] border border-line px-2.5 py-1 transition-colors hover:border-ink/40 hover:bg-raise'
+  const dead = 'rounded-[5px] border border-line/60 px-2.5 py-1 text-dim/40'
+  return (
+    <div className="flex shrink-0 items-center gap-3 border-t border-line px-7 py-2.5">
+      {note ? <span className="min-w-0 flex-1 truncate text-dim">{note}</span> : <span className="flex-1" />}
+      <span className="text-dim tabular-nums">
+        {page} of {pages}
+      </span>
+      {page > 1 ? (
+        <Link href={href(page - 1)} className={arrow} rel="prev">
+          ‹
+        </Link>
+      ) : (
+        <span className={dead}>‹</span>
+      )}
+      {page < pages ? (
+        <Link href={href(page + 1)} className={arrow} rel="next">
+          ›
+        </Link>
+      ) : (
+        <span className={dead}>›</span>
+      )}
+    </div>
+  )
 }
 
 export function Empty({ title, note }: { title: string; note: React.ReactNode }) {
@@ -154,7 +212,7 @@ export function Drawer({
             ✕
           </Link>
         </div>
-        <div className="min-h-0 flex-1 overflow-auto px-7 py-6">{children}</div>
+        <div className="quiet-scroll min-h-0 flex-1 px-7 py-6">{children}</div>
       </div>
     </div>
   )

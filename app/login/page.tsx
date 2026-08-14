@@ -59,8 +59,13 @@ export default async function Login({ searchParams }: PageProps<'/login'>) {
             </button>
           </form>
 
+          {/* Sealed, and no way in until you are. It can still be turned over. */}
           <div className="relative hidden min-w-0 flex-1 md:block">
-            <Letter progress={0} />
+            <Letter
+              cards={[
+                { id: 'sealed', name: 'A sealed letter', progress: 0, mark: '', count: 0, markHref: '', href: '' },
+              ]}
+            />
           </div>
         </div>
       </div>

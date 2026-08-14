@@ -71,7 +71,7 @@ export default function Importer() {
         {result.errors.length > 0 && (
           <div>
             <p className="mb-1.5 font-medium">Why rows were rejected</p>
-            <pre className="max-h-40 overflow-auto rounded-[5px] border border-line bg-raise p-3 text-[11.5px]">
+            <pre className="quiet-scroll max-h-40 rounded-[5px] border border-line bg-raise p-3 text-[11.5px]">
               {result.errors.join('\n')}
             </pre>
           </div>
@@ -115,7 +115,7 @@ export default function Importer() {
               Headers are never guessed. Map at least an address or a LinkedIn URL — anything you
               leave unmapped is kept on the person as context, not discarded.
             </p>
-            <div className="grid grid-cols-[9rem_1fr] items-center gap-x-3 gap-y-2">
+            <div className="grid grid-cols-[7rem_1fr] items-center gap-x-3 gap-y-1.5 sm:grid-cols-[7rem_1fr_7rem_1fr]">
               {FIELDS.map((name) => (
                 <Fragment key={name}>
                   <label
@@ -143,41 +143,22 @@ export default function Importer() {
           </section>
 
           <section>
-            <h3 className="mb-1.5 font-medium">First five rows</h3>
-            <div className="overflow-x-auto rounded-[5px] border border-line">
-              <table className="w-full border-collapse whitespace-nowrap text-[12px]">
-                <thead>
-                  <tr className="bg-raise">
-                    {headers.map((header) => (
-                      <th
-                        key={header}
-                        className="border-b border-line px-2.5 py-2 text-left font-medium"
-                      >
-                        {header}
-                        {claimed.has(header) ? (
-                          ''
-                        ) : (
-                          <span className="ml-1.5 text-[9.5px] font-normal uppercase tracking-[0.14em] text-dim">
-                            context
-                          </span>
-                        )}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.slice(0, 5).map((row, index) => (
-                    <tr key={index}>
-                      {headers.map((header) => (
-                        <td key={header} className="border-b border-line px-2.5 py-1.5">
-                          {row[header]}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <h3 className="mb-1.5 font-medium">What the first row becomes</h3>
+            <p className="mb-2.5 text-dim">
+              If this is not the person you expect, the mapping above is wrong.
+            </p>
+            <dl className="grid grid-cols-[7rem_1fr] gap-y-1 rounded-[5px] border border-line px-4 py-3">
+              {FIELDS.filter((name) => mapping[name]).map((name) => (
+                <Fragment key={name}>
+                  <dt className="text-[9.5px] uppercase tracking-[0.16em] text-dim">{name}</dt>
+                  <dd className="truncate">{rows[0]?.[mapping[name]!] || '—'}</dd>
+                </Fragment>
+              ))}
+              <dt className="text-[9.5px] uppercase tracking-[0.16em] text-dim">context</dt>
+              <dd className="truncate text-dim">
+                {headers.filter((h) => !claimed.has(h)).join(', ') || 'nothing left over'}
+              </dd>
+            </dl>
           </section>
 
           <div className="flex flex-wrap items-center gap-3 border-t border-line pt-5">

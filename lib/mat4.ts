@@ -47,6 +47,29 @@ export function rotationX(radians: number): Mat4 {
   return new Float32Array([1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1])
 }
 
+/**
+ * A point through a matrix, in clip coordinates — x, y, z and w, undivided.
+ *
+ * The mark on the letter is HTML pinned to a spot on a surface that is turning
+ * in three dimensions, so something has to say where that spot landed on the
+ * screen. `w` is handed back rather than divided out because `w <= 0` means the
+ * point is behind the camera, and dividing by it would mirror the mark to the
+ * wrong side of the screen instead of hiding it.
+ */
+export function transformPoint(
+  m: Mat4,
+  x: number,
+  y: number,
+  z: number,
+): [number, number, number, number] {
+  return [
+    m[0] * x + m[4] * y + m[8] * z + m[12],
+    m[1] * x + m[5] * y + m[9] * z + m[13],
+    m[2] * x + m[6] * y + m[10] * z + m[14],
+    m[3] * x + m[7] * y + m[11] * z + m[15],
+  ]
+}
+
 export function rotationY(radians: number): Mat4 {
   const c = Math.cos(radians)
   const s = Math.sin(radians)

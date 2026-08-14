@@ -1,20 +1,33 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
-import { identity, multiply, perspective, rotationX, rotationY, translation } from '@/lib/mat4'
+import { useRouter } from 'next/navigation'
+import { useEffect, useRef, useState } from 'react'
+import {
+  identity,
+  multiply,
+  perspective,
+  rotationX,
+  rotationY,
+  transformPoint,
+  translation,
+} from '@/lib/mat4'
 
 /**
- * The one object on the stage: a letter, in three dimensions, that you can pick
- * up and turn over.
+ * The letters, and there is nothing else on the stage.
  *
- * It is not decoration. How far the flap is open and how far the sheet has come
- * out of it is `progress` — the share of this campaign that has actually been
- * posted. A sealed envelope means nothing has gone; a letter half out means the
- * run is half done. You can read the state of the work from across the room.
+ * They stand in a row, the front one live and the rest falling back behind it.
+ * Each carries a mark — the small stamp on its face — which says the one thing
+ * that letter needs next and takes you to where you do it. How far the flap is
+ * open and how far the sheet has come out is how far that run has actually got,
+ * so a glance across the stack tells you which letter is stuck without reading
+ * a number.
  *
- * Raw WebGL2 on purpose. This is three meshes and one light. A scene-graph
- * library would be several hundred kilobytes to draw a box, a triangle and a
- * plane, and would still need the same forty lines of GLSL.
+ * The mark is drawn in GL as part of the envelope, but its label and hit target
+ * are a real HTML button pinned to the stamp's projected position every frame.
+ * Text stays crisp, the control is reachable by keyboard, and nothing about it
+ * has to be re-implemented in a shader.
+ *
+ * Raw WebGL2 on purpose. This is three meshes and one light.
  */
 
 const VERT = `#version 300 es
@@ -51,16 +64,30 @@ in float vKind;
 
 uniform vec3 uPrimary;
 uniform vec3 uPaper;
+uniform vec3 uCamera;
 uniform float uAmbient;
 uniform float uRim;
+uniform float uFade;
+uniform float uCode;
 
 out vec4 outColour;
-
-const vec3 CAMERA = vec3(0.0, 0.0, 3.6);
 
 float rect(vec2 p, vec2 a, vec2 b) {
   vec2 s = step(a, p) * step(p, b);
   return s.x * s.y;
+}
+
+/* The franking: twelve bars, tall or short by one bit of the letter's code
+   each, struck under the address. It is how you tell one letter from another
+   across the stack without reading anything, and it is what a real envelope
+   would carry — machines have always sorted post by printed bars. */
+float franking(vec2 uv, float code) {
+  const float BARS = 12.0;
+  float t = (uv.x - 0.14) / 0.46;
+  if (t < 0.0 || t > 1.0) return 0.0;
+  if (fract(t * BARS) > 0.45) return 0.0;
+  float bit = mod(floor(code / pow(2.0, floor(t * BARS))), 2.0);
+  return rect(uv, vec2(0.0, 0.150), vec2(1.0, 0.150 + (bit > 0.5 ? 0.058 : 0.031)));
 }
 
 float hash(float n) {
@@ -79,12 +106,16 @@ float writing(vec2 uv, float top, float rows) {
 }
 
 void main() {
+  // Single-sided geometry lit from both sides. Two coplanar faces with opposite
+  // normals would sit at identical depth, and the second would lose the depth
+  // test — the back of the sheet went flat and shimmered at glancing angles.
+  vec3 N = normalize(vNormal);
+  bool front = gl_FrontFacing;
+  if (!front) N = -N;
+
   vec3 base;
 
-  if (vKind > 2.5) {
-    // The underside of the flap: the same stock, in its own shadow.
-    base = uPrimary * 0.72;
-  } else if (vKind > 1.5) {
+  if (vKind > 1.5) {
     // The face of the envelope — where the address and the stamp go. Both are
     // struck in the secondary, which is the only other colour in this app.
     base = uPrimary;
@@ -94,19 +125,25 @@ void main() {
         rect(vUv, vec2(0.14, 0.425), vec2(0.62, 0.449))
       + rect(vUv, vec2(0.14, 0.345), vec2(0.52, 0.369))
       + rect(vUv, vec2(0.14, 0.265), vec2(0.40, 0.289));
-    base = mix(base, uPaper, clamp(stamp - inner + address * 0.92, 0.0, 1.0));
+    float mark = clamp(stamp - inner + address * 0.92 + franking(vUv, uCode) * 0.95, 0.0, 1.0);
+    base = mix(base, uPaper, mark);
   } else if (vKind > 0.5) {
-    // The sheet itself.
+    // The sheet itself. Written on one side, blank on the other.
     base = uPaper;
-    float head = rect(vUv, vec2(0.10, 0.855), vec2(0.36, 0.925));
-    base = mix(base, uPrimary, head);
-    base = mix(base, uPaper * 0.55, writing(vUv, 0.80, 22.0) * 0.85);
+    if (front) {
+      float head = rect(vUv, vec2(0.10, 0.855), vec2(0.36, 0.925));
+      base = mix(base, uPrimary, head);
+      base = mix(base, uPaper * 0.55, writing(vUv, 0.80, 22.0) * 0.85);
+    }
   } else {
-    base = uPrimary;
+    // Plain stock. The underside of the flap is the same paper in its own shade.
+    base = front ? uPrimary : uPrimary * 0.72;
   }
 
-  vec3 N = normalize(vNormal);
-  vec3 V = normalize(CAMERA - vWorld);
+  // Lit in sRGB rather than linear. Working linear without an sRGB framebuffer
+  // to convert back through renders the brand red several shades too dark, and
+  // this object is the brand before it is a physical simulation.
+  vec3 V = normalize(uCamera - vWorld);
   vec3 L = normalize(vec3(-0.30, 0.65, 0.75));
 
   float diffuse = max(dot(N, L), 0.0);
@@ -121,17 +158,15 @@ void main() {
   // nothing and is the difference between a surface and a set of stripes.
   colour += (hash(gl_FragCoord.x + gl_FragCoord.y * 1731.0) - 0.5) / 255.0;
 
-  outColour = vec4(colour, 1.0);
+  outColour = vec4(colour, uFade);
 }`
 
 /* ── geometry ──────────────────────────────────────────────────────────────
    Nine floats a vertex: position, normal, uv, and which surface it is. Built
-   once at module load — the letter is the same shape for everyone. */
-
-type Vertex = number[]
+   once at module load — every letter is the same shape. */
 
 function quad(
-  out: Vertex,
+  out: number[],
   a: number[],
   b: number[],
   c: number[],
@@ -154,14 +189,16 @@ const W = 1.9
 const H = 1.0
 const D = 0.05
 const FLAP = 0.46
+/** Where the stamp sits on the face, in uv. The mark is pinned here. */
+const STAMP = [0.875, 0.812]
 
 function envelopeMesh() {
   const x = W / 2
   const y = H / 2
   const z = D / 2
-  const out: Vertex = []
-  // Front carries the address, so it is its own surface; everything else is
-  // plain stock.
+  const out: number[] = []
+  // The front carries the address, so it is its own surface; the rest is plain
+  // stock. Winding is counter-clockwise seen from outside, so back faces cull.
   quad(out, [-x, -y, z], [x, -y, z], [x, y, z], [-x, y, z], [0, 0, 1], 2)
   quad(out, [x, -y, -z], [-x, -y, -z], [-x, y, -z], [x, y, -z], [0, 0, -1], 0)
   quad(out, [x, -y, z], [x, -y, -z], [x, y, -z], [x, y, z], [1, 0, 0], 0)
@@ -171,29 +208,24 @@ function envelopeMesh() {
   return new Float32Array(out)
 }
 
-/** Hinged at the origin so the model matrix can simply rotate it about x. */
+/** One triangle, hinged at the origin. The shader lights whichever side shows. */
 function flapMesh() {
   const x = W / 2
-  const out: Vertex = []
-  const push = (p: number[], n: number[], uv: number[], kind: number) =>
-    out.push(p[0], p[1], p[2], n[0], n[1], n[2], uv[0], uv[1], kind)
-
-  push([-x, 0, 0], [0, 0, 1], [0, 1], 0)
-  push([0, -FLAP, 0], [0, 0, 1], [0.5, 0], 0)
-  push([x, 0, 0], [0, 0, 1], [1, 1], 0)
-
-  push([-x, 0, 0], [0, 0, -1], [0, 1], 3)
-  push([x, 0, 0], [0, 0, -1], [1, 1], 3)
-  push([0, -FLAP, 0], [0, 0, -1], [0.5, 0], 3)
+  const out: number[] = []
+  const push = (p: number[], uv: number[]) =>
+    out.push(p[0], p[1], p[2], 0, 0, 1, uv[0], uv[1], 0)
+  push([-x, 0, 0], [0, 1])
+  push([0, -FLAP, 0], [0.5, 0])
+  push([x, 0, 0], [1, 1])
   return new Float32Array(out)
 }
 
+/** One quad, likewise. */
 function paperMesh() {
   const x = (W - 0.16) / 2
   const y = (H - 0.08) / 2
-  const out: Vertex = []
+  const out: number[] = []
   quad(out, [-x, -y, 0], [x, -y, 0], [x, y, 0], [-x, y, 0], [0, 0, 1], 1)
-  quad(out, [x, -y, 0], [-x, -y, 0], [-x, y, 0], [x, y, 0], [0, 0, -1], 1)
   return new Float32Array(out)
 }
 
@@ -210,30 +242,99 @@ function compile(gl: WebGL2RenderingContext, type: number, source: string) {
   return shader
 }
 
-const hex = (value: string): [number, number, number] => {
+const rgb = (value: string): [number, number, number] => {
   const n = parseInt(value.replace('#', ''), 16)
-  // sRGB to linear-ish. Without this the red renders orange once it is lit.
-  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255].map((c) =>
-    Math.pow(c, 2.2),
-  ) as [number, number, number]
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]
 }
 
-export default function Letter({ progress = 0 }: { progress?: number }) {
-  const ref = useRef<HTMLCanvasElement>(null)
-  // Read by the frame loop rather than closed over, so a progress change eases
-  // the flap open instead of tearing down the GL context and rebuilding it.
-  const target = useRef(progress)
+/** A three-quarter view: the face readable, the thickness visible. */
+const REST_YAW = -0.34
+const REST_PITCH = 0.16
+const SPACING = 2.35
+/** More than this either side of the front is behind the ones you can see. */
+const NEIGHBOURS = 3
+/** A press that moves less than this many pixels was a click, not a drag. */
+const SLOP = 6
+
+export type Card = {
+  id: string
+  name: string
+  /** 0 sealed, 1 fully drawn out. The share of this run that has been posted. */
+  progress: number
+  /** What this letter needs next. */
+  mark: string
+  /** The number struck on the mark. Zero shows no number. */
+  count: number
+  /** Where the mark goes — the step that does the thing. */
+  markHref: string
+  /** Where the letter itself goes when you open it. */
+  href: string
+  /** Its franking, from lib/rules.ts. Two letters never look the same. */
+  code: number
+}
+
+export default function Letter({
+  cards,
+  openId,
+  listed = false,
+  closeHref = '/',
+}: {
+  cards: Card[]
+  /** The letter the URL says is unfolded, if any. */
+  openId?: string
+  /** The stack has been turned into a list, so it stands back out of the way. */
+  listed?: boolean
+  closeHref?: string
+}) {
+  const router = useRouter()
+  const canvas = useRef<HTMLCanvasElement>(null)
+  const markEl = useRef<HTMLDivElement>(null)
+
+  const at = Math.max(
+    cards.findIndex((card) => card.id === openId),
+    0,
+  )
+  const [active, setActive] = useState(at)
+  const here = cards[Math.min(active, cards.length - 1)]
+
+  // The URL is still the authority on which letter is open; the stack only
+  // decides which one you are looking at when none is.
   useEffect(() => {
-    target.current = Math.min(Math.max(progress, 0), 1)
-  }, [progress])
+    if (openId) setActive(at)
+  }, [openId, at])
+
+  // Everything the frame loop reads. Kept in a ref so new server data eases the
+  // letters to their new state instead of tearing down the GL context.
+  const live = useRef({ cards, active, unfolded: Boolean(openId) || listed })
+  useEffect(() => {
+    live.current = { cards, active, unfolded: Boolean(openId) || listed }
+  }, [cards, active, openId, listed])
+
+  const go = useRef<(to: 'open' | 'mark') => void>(() => {})
+  useEffect(() => {
+    go.current = (to) => {
+      const card = live.current.cards[live.current.active]
+      if (!card) return
+      // An empty target means this letter is not a way in — the sealed one on
+      // the sign-in screen, which is there to be turned over and nothing else.
+      const target = to === 'mark' ? card.markHref : live.current.unfolded ? closeHref : card.href
+      if (target) router.push(target)
+    }
+  }, [router, closeHref])
+
+  const step = useRef<(by: number) => void>(() => {})
+  useEffect(() => {
+    step.current = (by) =>
+      setActive((n) => Math.min(Math.max(n + by, 0), Math.max(cards.length - 1, 0)))
+  }, [cards.length])
 
   useEffect(() => {
-    const canvas = ref.current
-    if (!canvas) return
+    const surface = canvas.current
+    if (!surface) return
 
     // No WebGL2 — the stage is already the right colour, so the app simply has
     // an empty stage instead of a lit one. Nothing else changes.
-    const gl = canvas.getContext('webgl2', { antialias: true, alpha: true })
+    const gl = surface.getContext('webgl2', { antialias: true, alpha: true })
     if (!gl) return
 
     const vert = compile(gl, gl.VERTEX_SHADER, VERT)
@@ -253,10 +354,8 @@ export default function Letter({ progress = 0 }: { progress?: number }) {
     const parts = MESHES.map((data) => {
       const vao = gl.createVertexArray()!
       gl.bindVertexArray(vao)
-      const buffer = gl.createBuffer()
-      gl.bindBuffer(gl.ARRAY_BUFFER, buffer)
+      gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer())
       gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW)
-      const stride = 9 * 4
       for (const [name, size, offset] of [
         ['aPos', 3, 0],
         ['aNormal', 3, 12],
@@ -268,7 +367,7 @@ export default function Letter({ progress = 0 }: { progress?: number }) {
         const loc = gl.getAttribLocation(program, name)
         if (loc < 0) continue
         gl.enableVertexAttribArray(loc)
-        gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride, offset)
+        gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 9 * 4, offset)
       }
       gl.bindVertexArray(null)
       return { vao, count: data.length / 9 }
@@ -277,24 +376,24 @@ export default function Letter({ progress = 0 }: { progress?: number }) {
     const u = (name: string) => gl.getUniformLocation(program, name)
     const uMVP = u('uMVP')
     const uModel = u('uModel')
-    const uPrimary = u('uPrimary')
-    const uPaper = u('uPaper')
-    const uAmbient = u('uAmbient')
-    const uRim = u('uRim')
+    const uCamera = u('uCamera')
+    const uFade = u('uFade')
+    const uCode = u('uCode')
 
     gl.enable(gl.DEPTH_TEST)
-    gl.enable(gl.CULL_FACE)
+    gl.enable(gl.BLEND)
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+    gl.clearColor(0, 0, 0, 0)
+    gl.uniform3fv(u('uPrimary'), rgb('#d92819'))
+    gl.uniform3fv(u('uPaper'), rgb('#ffffff'))
 
-    // The letter is the same red in both themes — it is the brand, not a
-    // surface. Only the light around it changes.
-    let light = false
+    // The letters are the same red in both rooms — that is the brand, not a
+    // surface. Only the light around them changes.
     const readTheme = () => {
       const set = document.documentElement.dataset.theme
-      light = set ? set === 'light' : !window.matchMedia('(prefers-color-scheme: dark)').matches
-      gl.uniform3fv(uPrimary, hex('#d92819'))
-      gl.uniform3fv(uPaper, hex('#ffffff'))
-      gl.uniform1f(uAmbient, light ? 0.62 : 0.3)
-      gl.uniform1f(uRim, light ? 0.1 : 0.5)
+      const light = set ? set === 'light' : !window.matchMedia('(prefers-color-scheme: dark)').matches
+      gl.uniform1f(u('uAmbient'), light ? 0.6 : 0.3)
+      gl.uniform1f(u('uRim'), light ? 0.1 : 0.5)
     }
     readTheme()
     const themeWatch = new MutationObserver(readTheme)
@@ -303,104 +402,246 @@ export default function Letter({ progress = 0 }: { progress?: number }) {
     scheme.addEventListener('change', readTheme)
 
     let projection = identity()
+    let width = 1
+    let height = 1
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio, 2)
-      const width = Math.max(canvas.clientWidth, 1)
-      const height = Math.max(canvas.clientHeight, 1)
-      canvas.width = Math.floor(width * dpr)
-      canvas.height = Math.floor(height * dpr)
-      gl.viewport(0, 0, canvas.width, canvas.height)
-      projection = perspective(Math.PI / 5.2, width / height, 0.1, 50)
+      width = Math.max(surface.clientWidth, 1)
+      height = Math.max(surface.clientHeight, 1)
+      const w = Math.floor(width * dpr)
+      const h = Math.floor(height * dpr)
+      // Assigning width or height reallocates the drawing buffer even when the
+      // value is unchanged, and the observer fires far more often than the size
+      // really moves.
+      if (w !== surface.width || h !== surface.height) {
+        surface.width = w
+        surface.height = h
+        gl.viewport(0, 0, w, h)
+      }
+      projection = perspective(Math.PI / 5.2, width / height, 0.1, 60)
     }
     const box = new ResizeObserver(resize)
-    box.observe(canvas)
+    box.observe(surface)
     resize()
 
-    /* ── holding it ──────────────────────────────────────────────────────── */
+    /* ── holding them ────────────────────────────────────────────────────── */
 
     const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    let yaw = -0.42
-    let pitch = 0.2
-    let spinVelocity = 0
-    let tiltVelocity = 0
+    let yaw = REST_YAW
+    let pitch = REST_PITCH
+    let spin = 0
+    let tilt = 0
+    let opened = 0
+    let shown = live.current.active
+    let unfold = live.current.unfolded ? 1 : 0
+
     let dragging = false
     let hovering = false
-    let opened = 0
+    // Deltas are banked here and spent once a frame. Reading them straight out
+    // of the pointer handler means a held-still finger keeps applying whatever
+    // the last move was, and the letter turns on its own under your thumb.
+    let bankedYaw = 0
+    let bankedPitch = 0
+    let travelled = 0
     let last = { x: 0, y: 0 }
+    let wheelLock = 0
 
     const onDown = (event: PointerEvent) => {
       dragging = true
+      travelled = 0
+      spin = 0
+      tilt = 0
       last = { x: event.clientX, y: event.clientY }
-      canvas.setPointerCapture(event.pointerId)
-      canvas.style.cursor = 'grabbing'
+      surface.setPointerCapture(event.pointerId)
+      surface.style.cursor = 'grabbing'
     }
+
     const onMove = (event: PointerEvent) => {
       if (!dragging) return
-      spinVelocity = (event.clientX - last.x) * 0.006
-      tiltVelocity = (event.clientY - last.y) * 0.004
+      const dx = event.clientX - last.x
+      const dy = event.clientY - last.y
+      travelled += Math.abs(dx) + Math.abs(dy)
+      bankedYaw += dx * 0.006
+      bankedPitch += dy * 0.004
       last = { x: event.clientX, y: event.clientY }
     }
+
     const onUp = (event: PointerEvent) => {
+      if (!dragging) return
       dragging = false
-      canvas.releasePointerCapture(event.pointerId)
-      canvas.style.cursor = 'grab'
+      // Losing the capture already released it; asking again throws.
+      if (surface.hasPointerCapture(event.pointerId)) surface.releasePointerCapture(event.pointerId)
+      surface.style.cursor = 'grab'
+      if (travelled < SLOP && event.type === 'pointerup') go.current('open')
     }
 
-    canvas.addEventListener('pointerdown', onDown)
-    canvas.addEventListener('pointermove', onMove)
-    canvas.addEventListener('pointerup', onUp)
-    canvas.addEventListener('pointercancel', onUp)
-    canvas.addEventListener('pointerenter', () => (hovering = true))
-    canvas.addEventListener('pointerleave', () => (hovering = false))
-    canvas.style.cursor = 'grab'
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'ArrowLeft') return step.current(-1)
+      if (event.key === 'ArrowRight') return step.current(1)
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        go.current('open')
+      }
+    }
 
-    const view = translation(0, 0, -3.6)
+    // A trackpad flick sideways walks the stack. Locked briefly after each step
+    // so one gesture does not skip four letters.
+    const onWheel = (event: WheelEvent) => {
+      if (Math.abs(event.deltaX) < Math.abs(event.deltaY) || Math.abs(event.deltaX) < 8) return
+      event.preventDefault()
+      const now = performance.now()
+      if (now < wheelLock) return
+      wheelLock = now + 260
+      step.current(event.deltaX > 0 ? 1 : -1)
+    }
 
-    function draw() {
-      // Picking it up beats the idle drift; letting go hands it back.
-      if (!dragging) spinVelocity += (still ? 0 : 0.0016 - spinVelocity) * 0.03
-      yaw += spinVelocity
-      pitch = Math.min(Math.max(pitch + tiltVelocity, -0.7), 0.7)
-      if (!dragging) {
-        spinVelocity *= 0.94
-        tiltVelocity *= 0.9
-        pitch += (0.2 - pitch) * 0.02
+    const onEnter = () => (hovering = true)
+    const onLeave = () => (hovering = false)
+
+    surface.addEventListener('pointerdown', onDown)
+    surface.addEventListener('pointermove', onMove)
+    surface.addEventListener('pointerup', onUp)
+    surface.addEventListener('pointercancel', onUp)
+    surface.addEventListener('keydown', onKey)
+    surface.addEventListener('wheel', onWheel, { passive: false })
+    surface.addEventListener('pointerenter', onEnter)
+    surface.addEventListener('pointerleave', onLeave)
+
+    /* ── drawing them ────────────────────────────────────────────────────── */
+
+    // Every easing below is in units of one 60Hz frame, then corrected by how
+    // long the frame actually took. Without that they settle twice as fast on a
+    // 120Hz display as on a 60Hz one.
+    const ease = (from: number, to: number, rate: number, dt: number) =>
+      from + (to - from) * (1 - Math.pow(1 - rate, dt))
+
+    let previous = performance.now()
+
+    function draw(now: number) {
+      const dt = Math.min((now - previous) / 16.667, 4)
+      previous = now
+      const { cards: deck, active: want, unfolded } = live.current
+
+      unfold = still ? (unfolded ? 1 : 0) : ease(unfold, unfolded ? 1 : 0, 0.09, dt)
+      shown = still ? want : ease(shown, want, 0.12, dt)
+
+      if (dragging) {
+        yaw += bankedYaw
+        pitch = Math.min(Math.max(pitch + bankedPitch, -0.7), 0.7)
+        if (dt > 0) {
+          // Carry the last frame's speed into the throw.
+          spin = bankedYaw / dt
+          tilt = bankedPitch / dt
+        }
+        bankedYaw = 0
+        bankedPitch = 0
+      } else {
+        yaw += spin * dt
+        pitch = Math.min(Math.max(pitch + tilt * dt, -0.7), 0.7)
+        spin *= Math.pow(0.93, dt)
+        tilt *= Math.pow(0.88, dt)
+        // Settles back to a readable three-quarter view rather than turning for
+        // ever. The mark is a click target now; a target that drifts is a
+        // target you have to chase.
+        const restYaw = REST_YAW * (1 - unfold)
+        const restPitch = REST_PITCH * (1 - unfold)
+        yaw = ease(yaw, restYaw, unfold > 0.01 ? 0.08 : 0.012, dt)
+        pitch = ease(pitch, restPitch, unfold > 0.01 ? 0.08 : 0.02, dt)
       }
 
-      // Hovering lifts the flap a little further, so the object answers before
-      // you have clicked anything.
-      const wanted = Math.min(target.current + (hovering ? 0.12 : 0), 1)
-      opened += (wanted - opened) * (still ? 1 : 0.06)
+      const front = deck[Math.round(shown)]
+      const target = front ? front.progress : 0
+      const wanted = Math.min(target + (hovering && !dragging && !unfolded ? 0.12 : 0), 1)
+      opened = still ? wanted : ease(opened, wanted, 0.06, dt)
 
-      const scene = multiply(rotationY(yaw), rotationX(pitch))
-      const models = [
-        scene,
-        // A hair proud of the face it closes onto, or the two co-planar
-        // surfaces fight for the same depth and the flap tears as it turns.
-        multiply(scene, multiply(translation(0, H / 2, D / 2 + 0.002), rotationX(opened * 2.25))),
-        multiply(scene, translation(0, opened * H * 0.92, -0.004)),
-      ]
+      // Unfolding pushes the neighbours out of frame and brings the front one
+      // square to the camera, so the panel arrives over an object already in
+      // the right place.
+      const spacing = SPACING + unfold * 7
+      const back = 3.5 + unfold * 0.35
+      const view = translation(0, 0, -back)
 
+      gl!.uniform3f(uCamera, 0, 0, back)
       gl!.clear(gl!.COLOR_BUFFER_BIT | gl!.DEPTH_BUFFER_BIT)
-      parts.forEach((part, index) => {
-        const model = models[index]
-        gl!.uniformMatrix4fv(uModel, false, model)
-        gl!.uniformMatrix4fv(uMVP, false, multiply(projection, multiply(view, model)))
-        gl!.bindVertexArray(part.vao)
-        // The flap and the sheet are single surfaces, seen from both sides.
-        if (index === 0) gl!.enable(gl!.CULL_FACE)
-        else gl!.disable(gl!.CULL_FACE)
-        gl!.drawArrays(gl!.TRIANGLES, 0, part.count)
-      })
+
+      let markScreen: { x: number; y: number; on: boolean } = { x: 0, y: 0, on: false }
+      const first = Math.max(Math.round(shown) - NEIGHBOURS, 0)
+      const lastCard = Math.min(Math.round(shown) + NEIGHBOURS, deck.length - 1)
+
+      for (let i = first; i <= lastCard; i++) {
+        const rel = i - shown
+        const away = Math.min(Math.abs(rel), 1)
+        // Behind the front one, and turned back to a common pose, so the stack
+        // reads as a stack rather than a row of identical objects.
+        const model = multiply(
+          translation(rel * spacing, 0, -Math.abs(rel) * 0.85),
+          multiply(rotationY(yaw * (1 - away) + REST_YAW * away), rotationX(pitch * (1 - away))),
+        )
+        const lid = opened * (1 - away)
+        const models = [
+          model,
+          // A hair proud of the face it closes onto, or the two co-planar
+          // surfaces fight for the same depth and the flap tears as it turns.
+          multiply(model, multiply(translation(0, H / 2, D / 2 + 0.002), rotationX(lid * 2.25))),
+          multiply(model, translation(0, lid * H * 0.92, -0.004)),
+        ]
+
+        gl!.uniform1f(uFade, 1 - Math.min(Math.abs(rel) / (NEIGHBOURS + 0.6), 1))
+        gl!.uniform1f(uCode, deck[i].code)
+
+        parts.forEach((part, p) => {
+          if (p === 2 && lid < 0.02) return // the sheet is still inside
+          gl!.uniformMatrix4fv(uModel, false, models[p])
+          gl!.uniformMatrix4fv(uMVP, false, multiply(projection, multiply(view, models[p])))
+          gl!.bindVertexArray(part.vao)
+          // The flap and the sheet are single surfaces, seen from both sides.
+          if (p === 0) gl!.enable(gl!.CULL_FACE)
+          else gl!.disable(gl!.CULL_FACE)
+          gl!.drawArrays(gl!.TRIANGLES, 0, part.count)
+        })
+
+        // Where the stamp landed on screen, for the button that sits on it.
+        if (Math.abs(rel) < 0.5) {
+          const sx = (STAMP[0] - 0.5) * W
+          const sy = (STAMP[1] - 0.5) * H
+          const clip = transformPoint(
+            multiply(projection, multiply(view, model)),
+            sx,
+            sy,
+            D / 2,
+          )
+          const world = transformPoint(model, sx, sy, D / 2)
+          const normal = transformPoint(model, 0, 0, 1)
+          // The face has to be pointing at you, or the mark would show through
+          // the back of the envelope.
+          const facing =
+            (normal[0] - model[12]) * (0 - world[0]) +
+            (normal[1] - model[13]) * (0 - world[1]) +
+            (normal[2] - model[14]) * (back - world[2])
+          markScreen = {
+            x: (clip[0] / clip[3] / 2 + 0.5) * width,
+            y: (0.5 - clip[1] / clip[3] / 2) * height,
+            on: clip[3] > 0 && facing > 0 && unfold < 0.06,
+          }
+        }
+      }
+
+      // Written straight to the node. Putting this through React would be a
+      // re-render every frame to move one button four pixels.
+      const node = markEl.current
+      if (node) {
+        node.style.transform = `translate3d(${markScreen.x}px, ${markScreen.y}px, 0) translate(-50%, -50%)`
+        node.style.opacity = markScreen.on ? '1' : '0'
+        node.style.pointerEvents = markScreen.on ? 'auto' : 'none'
+      }
     }
 
-    let frame = 0
-    const loop = () => {
+    let frame = requestAnimationFrame(function loop(now) {
       // A background tab burning GPU on an envelope nobody is looking at.
-      if (!document.hidden) draw()
+      if (!document.hidden) draw(now)
+      else previous = now
       frame = requestAnimationFrame(loop)
-    }
-    frame = requestAnimationFrame(loop)
+    })
 
     // Deliberately not calling WEBGL_lose_context here. StrictMode runs this
     // effect twice in development, and a canvas whose context has been lost
@@ -412,19 +653,68 @@ export default function Letter({ progress = 0 }: { progress?: number }) {
       box.disconnect()
       themeWatch.disconnect()
       scheme.removeEventListener('change', readTheme)
-      canvas.removeEventListener('pointerdown', onDown)
-      canvas.removeEventListener('pointermove', onMove)
-      canvas.removeEventListener('pointerup', onUp)
-      canvas.removeEventListener('pointercancel', onUp)
+      surface.removeEventListener('pointerdown', onDown)
+      surface.removeEventListener('pointermove', onMove)
+      surface.removeEventListener('pointerup', onUp)
+      surface.removeEventListener('pointercancel', onUp)
+      surface.removeEventListener('keydown', onKey)
+      surface.removeEventListener('wheel', onWheel)
+      surface.removeEventListener('pointerenter', onEnter)
+      surface.removeEventListener('pointerleave', onLeave)
     }
   }, [])
 
   return (
-    <canvas
-      ref={ref}
-      className="size-full touch-none select-none"
-      aria-label="The letter. Drag to turn it over."
-      role="img"
-    />
+    <div className="relative size-full">
+      <canvas
+        ref={canvas}
+        tabIndex={0}
+        role="button"
+        aria-label={
+          here
+            ? `${here.name}. Drag to turn it over, arrow keys to move through the stack, enter to open it.`
+            : 'No letters yet'
+        }
+        style={{ cursor: 'grab' }}
+        className="size-full touch-none select-none"
+      />
+
+      {/* The mark. Pinned to the stamp every frame, and the only control on the
+          object — it always says the one thing this letter needs next. */}
+      <div ref={markEl} className="absolute left-0 top-0 opacity-0 transition-opacity duration-200">
+        {here?.mark && (
+          <button
+            onClick={() => go.current('mark')}
+            className="whitespace-nowrap rounded-[4px] border border-secondary/60 bg-primary px-2.5 py-1.5 text-[10.5px] font-medium uppercase tracking-[0.12em] text-secondary shadow-[0_6px_20px_-6px_rgba(0,0,0,0.8)] transition-transform hover:scale-105"
+          >
+            {here.count > 0 ? `${here.count} · ${here.mark}` : here.mark}
+          </button>
+        )}
+      </div>
+
+      {/* Which letter you are looking at. The bars on its face are what tells
+          them apart at a glance; this is where you confirm which is which. */}
+      {here?.name && (
+        <p className="pointer-events-none absolute inset-x-0 bottom-7 truncate px-6 text-center font-medium">
+          {here.name}
+        </p>
+      )}
+
+      {cards.length > 1 && (
+        <div className="absolute inset-x-0 bottom-0 flex justify-center gap-1.5">
+          {cards.map((card, index) => (
+            <button
+              key={card.id}
+              onClick={() => setActive(index)}
+              aria-label={card.name}
+              aria-current={index === active ? 'true' : undefined}
+              className={`h-1.5 rounded-full transition-all ${
+                index === active ? 'w-5 bg-primary' : 'w-1.5 bg-ink/25 hover:bg-ink/50'
+              }`}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   )
 }

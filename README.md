@@ -32,13 +32,24 @@ in about 250 lines of raw WebGL2 (`app/letter.tsx`, matrices in `lib/mat4.ts`);
 a scene-graph library would be several hundred kilobytes to draw a box, a
 triangle and a plane.
 
+The letters stand in a stack — arrow keys, a sideways trackpad flick, or the
+dots underneath move through them. Each carries a **mark**: the stamp on its
+face, which says the one thing that letter needs next and takes you to where
+you do it. Marked drafts outrank everything, because that is the only state the
+machine cannot leave without a person. `nextAction()` in `lib/rules.ts` decides
+it, and is tested.
+
 Campaigns are **letters**, contacts are the **address book**, mailboxes are
 **post boxes**, and the suppression list is what came back **returned**. The
-card on the left never moves and answers the four questions you have every
-morning: what needs me, what is written, how much postage is released right
-now, and where is everything else. Working panels are set down to the right
-when you need one. A letter itself is four numbered clauses — the message, the
-round, the reading, the post.
+strip along the top is both the readout and the way to all three. Clicking a
+letter unfolds it into four steps — the message, the round, the reading, the
+post.
+
+**Nothing scrolls.** A surface that does not fit is the wrong surface, so lists
+are paged, the campaign is stepped, and the reading goes one message at a time —
+which is how a stack of letters actually gets signed. `overflow: hidden` on the
+document makes that a rule rather than an intention: anything that overflows is
+a bug you can see instead of a scrollbar you can live with.
 
 Along the bottom is a command line. `⌘K` focuses it; anything it does not
 recognise is treated as a search of the address book.
