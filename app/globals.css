@@ -1,42 +1,68 @@
 @import "tailwindcss";
 
-/* Three materials, and only three.
+/* Two colours, and everything else is a neutral.
 
-   The frame is the room the thing sits in — near-white, quiet, no content.
-   The stage is a lit black box inside it. Floating on the stage: one dark
-   instrument card, and one sheet of paper.
+   Primary #d92819 is the letter, the one forward action, and the one warning.
+   Secondary #ffffff is the ink in the dark and the ground in the light. Nothing
+   else is coloured, so anything red on screen is either the object itself or
+   something asking for you.
 
-   The paper is the point. This app writes letters, so the letter is the object
-   you look at, on real stock, in a real serif, at a believable page width.
-   Everything else is the machinery around it and stays out of its way.
+   With a two-colour palette the semantics cannot come from hue, so they come
+   from weight: a filled red button acts, a red hairline warns, red text
+   reports. A screen with no red on it has nothing wrong and nothing to do.
 
-   Colour still only ever says something. Blue is the one forward action.
-   Oxblood is stop — halted, suppressed, invalid. Mustard is a mark in the
-   margin: something a person must look at. Nothing else is coloured. */
+   Every token below is a pointer at a themed variable, so the theme swaps in
+   one place and the utilities never change. */
 @theme {
-  --color-frame: #fbfaf8;
-  --color-stage: #08080a;
+  --color-ground: var(--ground);
+  --color-stage: var(--stage);
+  --color-panel: var(--panel);
+  --color-raise: var(--raise);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-dim: var(--dim);
 
-  /* the instrument card */
-  --color-card: #17171a;
-  --color-card-line: #2b2b30;
-  --color-card-ink: #f3f1ed;
-  --color-card-dim: #8a8a8f;
+  --color-primary: #d92819;
+  --color-secondary: #ffffff;
 
-  /* the paper */
-  --color-paper: #f1ede4;
-  --color-ink: #1a1917;
-  --color-dim: #6e6a62;
-  --color-rule: #d8d1c3;
+  --font-sans: "Helvetica Neue", Helvetica, Arial, "Nimbus Sans", sans-serif;
+}
 
-  /* the three inks */
-  --color-go: #2323dc;
-  --color-stop: #a62b22;
-  --color-mark: #a87a22;
+/* The light room. */
+:root {
+  --ground: #ffffff;
+  --stage: #f1efed;
+  --panel: #ffffff;
+  --raise: #f7f5f3;
+  --line: #e2dedb;
+  --ink: #121110;
+  --dim: #6f6a66;
+  color-scheme: light;
+}
 
-  --font-sans: var(--font-inter), ui-sans-serif, -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  --font-serif: var(--font-newsreader), ui-serif, Georgia, "Times New Roman", serif;
-  --font-mono: var(--font-plex-mono), ui-monospace, "SF Mono", Menlo, monospace;
+/* The dark room. Chosen by the system unless the toggle has overruled it. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0a0a09;
+    --stage: #121211;
+    --panel: #171716;
+    --raise: #1f1f1d;
+    --line: #2c2b29;
+    --ink: #ffffff;
+    --dim: #918c87;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground: #0a0a09;
+  --stage: #121211;
+  --panel: #171716;
+  --raise: #1f1f1d;
+  --line: #2c2b29;
+  --ink: #ffffff;
+  --dim: #918c87;
+  color-scheme: dark;
 }
 
 html,
@@ -45,114 +71,87 @@ body {
 }
 
 body {
-  background: var(--color-frame);
+  background: var(--color-ground);
   color: var(--color-ink);
   font-family: var(--font-sans);
   font-size: 13.5px;
   line-height: 1.5;
+  letter-spacing: -0.006em;
   -webkit-font-smoothing: antialiased;
   font-variant-numeric: tabular-nums;
 }
 
 ::selection {
-  background: var(--color-ink);
-  color: var(--color-paper);
+  background: var(--color-primary);
+  color: var(--color-secondary);
 }
 
 /* ── The stage ──────────────────────────────────────────────────────────────
-   One soft light from above and behind, and a vignette that closes the corners.
-   Two gradients and no canvas: the light never moves, so nothing here needs a
-   frame loop to draw it. */
+   The lit box the letter sits in. One soft light from above and a vignette
+   that closes the corners — two gradients, no canvas, because the light never
+   moves and nothing that never moves needs a frame loop. */
 .stage {
   background:
-    radial-gradient(120% 80% at 50% -10%, #24242a 0%, #101014 38%, transparent 70%),
-    radial-gradient(90% 70% at 50% 120%, #121216 0%, transparent 60%),
+    radial-gradient(115% 78% at 50% -8%, color-mix(in oklab, var(--color-ink) 9%, var(--color-stage)) 0%, var(--color-stage) 52%, transparent 72%),
+    radial-gradient(90% 65% at 50% 118%, color-mix(in oklab, var(--color-ink) 5%, var(--color-stage)) 0%, transparent 60%),
     var(--color-stage);
 }
 
-/* ── Grain ──────────────────────────────────────────────────────────────────
-   Paper is not a flat fill and near-black gradients band badly on 8-bit
-   displays. One inline turbulence, no image request, applied at an opacity
-   where you can only tell it is there by turning it off. */
+/* Near-flat gradients band badly on 8-bit displays. One inline turbulence at
+   an opacity where you can only tell it is there by switching it off. */
 .grain::before {
   content: "";
   position: absolute;
   inset: 0;
   pointer-events: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  opacity: 0.035;
+  opacity: 0.03;
   mix-blend-mode: overlay;
 }
 
-/* ── The sheet ──────────────────────────────────────────────────────────────
-   Stock with weight to it: a hairline of its own edge, a close contact shadow
-   and a long soft one, so it reads as lying on the stage rather than printed
-   on it. */
-.sheet {
-  background: var(--color-paper);
+/* Working surfaces float over the stage: opaque, because dense text on a lit
+   translucent panel is unreadable in both themes. */
+.panel {
+  background: var(--color-panel);
   box-shadow:
-    0 1px 0 rgb(255 255 255 / 0.55) inset,
-    0 2px 5px -1px rgb(0 0 0 / 0.5),
-    0 40px 80px -24px rgb(0 0 0 / 0.75);
-}
-
-/* The instrument card is the one translucent thing here — the stage light
-   behind it shows through. Dense text sits on the paper, never on this. */
-.card {
-  background: color-mix(in oklab, var(--color-card) 82%, transparent);
-  backdrop-filter: blur(24px) saturate(1.2);
-  box-shadow:
-    0 0 0 1px var(--color-card-line),
-    0 30px 70px -20px rgb(0 0 0 / 0.9);
+    0 0 0 1px var(--color-line),
+    0 30px 70px -22px rgb(0 0 0 / 0.5);
 }
 
 /* ── Stamps ─────────────────────────────────────────────────────────────────
-   A status is a mark struck onto the page, so it is drawn as one: letterpress
-   weight, wide tracking, a box round it, sitting very slightly off square. Not
-   a badge with a rounded fill — that is a web control, and this is a stamp. */
+   A status is a mark struck onto the page, not a badge with a rounded fill.
+   Helvetica in caps, tracked wide, inside a hairline of its own colour. */
 .stamp {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.13em;
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  padding: 2px 6px;
+  padding: 2px 5px;
   border: 1px solid currentColor;
   border-radius: 2px;
-  opacity: 0.85;
-  transform: rotate(-1.2deg);
   white-space: nowrap;
+  line-height: 1.4;
 }
 
-/* Focus is the go blue on the stage, ink on paper. Never a browser halo. */
 :focus-visible {
-  outline: 2px solid var(--color-go);
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
   border-radius: 3px;
 }
 
-.sheet :focus-visible {
-  outline-color: var(--color-ink);
-}
-
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--color-rule) transparent;
-}
-
-.card *,
-.stage > * {
-  scrollbar-color: var(--color-card-line) transparent;
+  scrollbar-color: var(--color-line) transparent;
 }
 
 select option {
-  background: var(--color-paper);
+  background: var(--color-panel);
   color: var(--color-ink);
 }
 
 /* ── Navigation ─────────────────────────────────────────────────────────────
-   The frame, the stage and the card never move. Only the sheet changes, and it
-   changes the way a page is replaced on a desk: the old one fades, the new one
-   settles a few pixels down. */
+   The room, the stage and the letter never move. Only the working panel over
+   them changes, and it changes the way a page is set down on a desk. */
 ::view-transition {
   pointer-events: none;
 }
@@ -169,19 +168,19 @@ select option {
 }
 
 ::view-transition-old(.screen) {
-  animation: 110ms ease-in both sheet-out;
+  animation: 110ms ease-in both panel-out;
 }
 ::view-transition-new(.screen) {
-  animation: 240ms cubic-bezier(0.32, 0.72, 0, 1) 90ms both sheet-in;
+  animation: 240ms cubic-bezier(0.32, 0.72, 0, 1) 90ms both panel-settle;
 }
 
-@keyframes sheet-out {
+@keyframes panel-out {
   to {
     opacity: 0;
   }
 }
 
-@keyframes sheet-in {
+@keyframes panel-settle {
   from {
     opacity: 0;
     transform: translateY(8px);

@@ -1,11 +1,13 @@
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { COOKIE, cookieValue, passwordMatches } from '@/lib/auth'
+import Letter from '../letter'
+import ThemeSwitch from '../theme'
 
 /**
- * The same room, before you have been let into it: frame, stage, and one card
- * floating on the light. Nothing is on the desk yet, so the stage is empty —
- * which is the honest picture of where you are.
+ * The same room, before you have been let into it. The letter is on the stage
+ * and sealed — nothing has been written, which is the honest picture of where
+ * you are — and you can still pick it up and turn it over while you type.
  */
 export default async function Login({ searchParams }: PageProps<'/login'>) {
   const { e } = await searchParams
@@ -24,24 +26,22 @@ export default async function Login({ searchParams }: PageProps<'/login'>) {
 
   return (
     <div className="flex h-dvh flex-col">
-      <header className="flex shrink-0 items-center justify-center px-5 py-3">
-        <span className="font-serif text-[19px] tracking-[-0.02em]">qatalyst</span>
+      <header className="relative flex shrink-0 items-center justify-center px-4 py-2.5">
+        <span className="text-[15px] font-semibold tracking-[-0.04em]">qatalyst</span>
+        <div className="absolute right-4">
+          <ThemeSwitch />
+        </div>
       </header>
 
       <div className="min-h-0 flex-1 px-3 pb-3">
-        <div className="stage grain relative h-full overflow-hidden rounded-[22px]">
-          <form
-            action={login}
-            className="card absolute left-1/2 top-1/2 w-[min(21rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[12px] p-7 md:left-[9%] md:translate-x-0"
-          >
-            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-card-dim">
-              Internal
-            </p>
-            <h1 className="mt-2 font-serif text-[27px] leading-tight text-card-ink">
+        <div className="stage grain relative flex h-full items-center gap-4 overflow-hidden rounded-[18px] p-4">
+          <form action={login} className="panel w-[min(21rem,100%)] shrink-0 rounded-[10px] p-7">
+            <p className="text-[9.5px] font-medium uppercase tracking-[0.16em] text-dim">Internal</p>
+            <h1 className="mt-2 text-[25px] font-medium leading-tight tracking-[-0.03em]">
               Who&rsquo;s writing?
             </h1>
 
-            <label htmlFor="password" className="mt-7 block text-card-dim">
+            <label htmlFor="password" className="mt-7 block text-dim">
               Password
             </label>
             <input
@@ -50,14 +50,18 @@ export default async function Login({ searchParams }: PageProps<'/login'>) {
               type="password"
               autoFocus
               autoComplete="current-password"
-              className="mt-1.5 w-full rounded-[4px] border border-card-line bg-white/[0.04] px-3 py-2 text-card-ink transition-colors focus:border-go"
+              className="mt-1.5 w-full rounded-[5px] border border-line bg-raise px-3 py-2 transition-colors focus:border-primary"
             />
-            {e ? <p className="mt-2 text-[#E8837B]">That password is not right.</p> : null}
+            {e ? <p className="mt-2 text-primary">That password is not right.</p> : null}
 
-            <button className="mt-5 w-full rounded-[4px] bg-go py-2.5 font-medium text-white transition-[filter] hover:brightness-115">
+            <button className="mt-5 w-full rounded-[5px] bg-primary py-2.5 font-medium text-secondary transition-[filter] hover:brightness-110">
               Sit down
             </button>
           </form>
+
+          <div className="relative hidden min-w-0 flex-1 md:block">
+            <Letter progress={0} />
+          </div>
         </div>
       </div>
     </div>

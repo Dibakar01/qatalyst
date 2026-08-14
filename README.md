@@ -20,20 +20,25 @@ Contacts ──▶ Campaign ──▶ Review ──▶ Send
   + verify    message       each one   own mailboxes
 ```
 
-It is one screen, and it is a desk rather than a set of pages. A near-white
-frame, a lit black stage inside it, and on that stage exactly two objects: the
-instrument card on the left, and one sheet of paper in front of you.
+It is one screen, and it is a desk rather than a set of pages. A lit stage, and
+on that stage exactly one object: **the letter**, in three dimensions, which
+you can pick up and turn over.
 
-The paper is the point. This app writes letters, so a letter is drawn as a
-letter — real stock, a real serif, a page width you can read — and everything
-else is machinery that stays out of its way. Campaigns are **letters** on the
-desk, contacts are the **address book**, mailboxes are **post boxes**, and the
-suppression list is what came back **returned**.
+The letter is not decoration. How far its flap is open and how far the sheet has
+come out of it is how far the work has actually got — sealed means nothing has
+gone, half out means the run is half done — so the state of a campaign is the
+first thing you see and you never have to read a number to know it. It is drawn
+in about 250 lines of raw WebGL2 (`app/letter.tsx`, matrices in `lib/mat4.ts`);
+a scene-graph library would be several hundred kilobytes to draw a box, a
+triangle and a plane.
 
-The card never moves and answers the four questions you have every morning:
-what needs me, what is written, how much postage is released right now, and
-where is everything else. A letter itself is four numbered clauses — the
-message, the round, the reading, the post.
+Campaigns are **letters**, contacts are the **address book**, mailboxes are
+**post boxes**, and the suppression list is what came back **returned**. The
+card on the left never moves and answers the four questions you have every
+morning: what needs me, what is written, how much postage is released right
+now, and where is everything else. Working panels are set down to the right
+when you need one. A letter itself is four numbered clauses — the message, the
+round, the reading, the post.
 
 Along the bottom is a command line. `⌘K` focuses it; anything it does not
 recognise is treated as a search of the address book.
@@ -48,9 +53,17 @@ boxes        returned    desk
 without one. Everything a command does is also a button on the paper, and both
 post to the same server action.
 
-Colour only ever says something: blue is the one forward action, oxblood is
-stop, mustard is a mark in the margin meaning a person must look. A sheet with
-no colour on it is a sheet with nothing wrong.
+Two colours and nothing else: **#d92819** and **#ffffff**. With a palette that
+small the meaning cannot come from hue, so it comes from weight — a filled red
+button acts, a red hairline warns, red text reports, and everything settled is
+plain ink. A screen with no red on it needs nothing from you, which you can
+check from across the room.
+
+Both a light and a dark room, switched in the header and remembered. The choice
+is written to `<html data-theme>` by a blocking script before first paint, so
+there is no flash of the wrong one; the CSS and the letter's shader both read it
+from there, so they can never disagree. Type is Helvetica — already on every
+machine this runs on, so there is no webfont to load and no layout shift.
 
 ## Setup
 

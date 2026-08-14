@@ -33,6 +33,7 @@ import {
 } from './actions'
 import { CommandBar, ClearFilters, Filter, Meter, Search, type Box } from './console'
 import Importer from './importer'
+import Letter from '../letter'
 import {
   Clause,
   Drawer,
@@ -40,6 +41,7 @@ import {
   field,
   go,
   ink,
+  Label,
   Ledger,
   quiet,
   ruled,
@@ -49,16 +51,18 @@ import {
 } from './ui'
 
 /**
- * One desk, and there is no second one.
+ * One desk, one object on it.
  *
- * The app used to be four screens you walked between. It is now a desk you sit
- * at: instruments on the left, one sheet of paper in front of you, and a
- * command line along the bottom. The sheet changes; nothing else moves.
+ * The letter is always there — a real one, in three dimensions, that you can
+ * pick up and turn over. How far it is open is how far the work has actually
+ * got, so the state of the run is the first thing you see and you do not have
+ * to read a number to know it.
  *
- * Nothing here is a new source of truth. The tally is the message states, the
- * meter is lib/rules.ts, the box numbers are the sender's own, and every button
- * posts to a server action that already existed. The search params are the only
- * state: `?c=` opens a letter, `?view=` picks a sheet, the rest filter a list.
+ * Everything else is machinery around that object: the card on the left holds
+ * the letters and the instruments, working panels are set down to the right
+ * when you need one, and a command line runs along the bottom. Nothing
+ * navigates away — `?c=` opens a letter, `?view=` sets down a panel, and the
+ * search params are the only state this desk has.
  */
 
 const BOOK_VIEWS = new Set(['book', 'boxes', 'returned'])
@@ -100,63 +104,76 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
   const sent = sum((r) => r.sent)
   const written = drafts + flagged + approved + sent
   const halted = boxes.filter((box) => box.halted)
-  const posting = rows.filter((r) => r.campaign.status === 'sending')
   const open = openId ? rows.find((r) => r.campaign.id === openId) : undefined
 
-  const nav = [
-    { href: '/', label: 'The desk', count: rows.length, on: !view && !openId ? true : Boolean(openId) },
-    { href: '/?view=book', label: 'Address book', count: contacts.total, on: view === 'book' },
-    { href: '/?view=boxes', label: 'Post boxes', count: boxes.length, on: view === 'boxes' },
-    { href: '/?view=returned', label: 'Returned', count: null, on: view === 'returned' },
-  ]
+  // What the object shows. Signing lifts the flap; posting draws the sheet out.
+  // Bound to the open letter when there is one, otherwise to all of them.
+  const shown = open ?? { drafts, flagged, approved, sent }
+  const total = shown.drafts + shown.flagged + shown.approved + shown.sent
+  const progress = total > 0 ? (shown.approved * 0.35 + shown.sent) / total : 0
+
+  const hasPanel = Boolean(openId) || BOOK_VIEWS.has(view)
 
   return (
     <>
-      <div className="flex min-h-0 flex-1 gap-5 p-5">
-        {/* ── the instruments ──────────────────────────────────────────────
-            Never leaves, never scrolls out from under you. Answers the four
-            questions you have every morning: what needs me, what is written,
-            what may go out now, and where is everything else. */}
-        <aside className="card hidden w-[300px] shrink-0 flex-col overflow-hidden rounded-[12px] xl:flex">
-          <nav className="shrink-0 border-b border-card-line/70 p-2.5">
-            {nav.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                aria-current={item.on ? 'page' : undefined}
-                className={`flex items-center gap-2 rounded-[6px] px-2.5 py-2 transition-colors ${
-                  item.on
-                    ? 'bg-white/[0.07] text-card-ink'
-                    : 'text-card-dim hover:bg-white/[0.04] hover:text-card-ink'
-                }`}
-              >
-                <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                {item.count !== null && (
-                  <span className="font-mono text-[11px] opacity-70">{item.count}</span>
-                )}
-              </Link>
-            ))}
+      <div className="relative flex min-h-0 flex-1 gap-4 p-4">
+        {/* ── the card: the letters, and how the machine is running ──────── */}
+        <aside className="panel hidden w-[298px] shrink-0 flex-col overflow-hidden rounded-[10px] xl:flex">
+          <div className="flex shrink-0 items-center gap-2 border-b border-line px-4 py-3">
+            <Label>Letters</Label>
+            <form action={newCampaign} className="ml-auto flex items-center gap-1.5">
+              <label className="block">
+                <span className="sr-only">Name a new letter</span>
+                <input name="name" placeholder="New letter" className={`${ruled} w-24 py-1`} />
+              </label>
+              <button className="text-primary transition-opacity hover:opacity-70" aria-label="Start it">
+                +
+              </button>
+            </form>
+          </div>
+
+          <nav className="max-h-[34%] shrink-0 overflow-auto border-b border-line py-1.5">
+            {rows.length === 0 ? (
+              <p className="px-4 py-2 text-dim">Nothing written yet.</p>
+            ) : (
+              rows.map(({ campaign, drafts: d, flagged: f, approved: a, sent: s }) => (
+                <Link
+                  key={campaign.id}
+                  href={`/?c=${campaign.id}`}
+                  aria-current={campaign.id === openId ? 'page' : undefined}
+                  className={`flex items-center gap-2 px-4 py-1.5 transition-colors ${
+                    campaign.id === openId ? 'bg-raise text-ink' : 'text-dim hover:bg-raise hover:text-ink'
+                  }`}
+                >
+                  <span className="min-w-0 flex-1 truncate">{campaign.name}</span>
+                  {f > 0 && <Stamp tone="flagged">{`${f}`}</Stamp>}
+                  <span className="shrink-0 text-[11px] tabular-nums opacity-70">
+                    {d + f > 0 ? `${d + f} to read` : a > 0 ? `${a} signed` : s > 0 ? `${s} out` : '—'}
+                  </span>
+                </Link>
+              ))
+            )}
           </nav>
 
           <div className="min-h-0 flex-1 space-y-6 overflow-auto p-4">
             {/* What needs a person. First, because it is the only part of the
                 system that cannot move without you. Gone when there is nothing
-                to say, so its presence is the signal. */}
+                to say, so its presence is the whole signal. */}
             {(flagged > 0 || halted.length > 0) && (
               <section className="space-y-2">
                 {halted.map((box) => (
                   <p
                     key={box.id}
-                    className="rounded-[4px] border border-[#E8837B]/30 bg-[#E8837B]/[0.08] px-3 py-2.5 text-[#E8837B]"
+                    className="rounded-[5px] border border-primary/35 bg-primary/[0.06] px-3 py-2.5"
                   >
-                    <strong className="font-medium">{box.email} halted itself</strong> —{' '}
-                    {(box.bounceRate * 100).toFixed(1)}% came back, over the 3% threshold. Its
-                    letters were held. Fix the list behind it.
+                    <strong className="font-medium text-primary">{box.email} halted itself</strong>{' '}
+                    — {(box.bounceRate * 100).toFixed(1)}% came back, over the 3% threshold. Its
+                    letters were held.
                   </p>
                 ))}
                 {flagged > 0 && (
-                  <p className="rounded-[4px] border border-[#E0B45E]/30 bg-[#E0B45E]/[0.08] px-3 py-2.5 text-[#E0B45E]">
-                    <strong className="font-medium">
+                  <p className="rounded-[5px] border border-primary/35 bg-primary/[0.06] px-3 py-2.5">
+                    <strong className="font-medium text-primary">
                       {flagged} {flagged === 1 ? 'draft is' : 'drafts are'} marked for you
                     </strong>{' '}
                     — a reader flagged them. They can never be signed in bulk.
@@ -166,23 +183,21 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
             )}
 
             <section>
-              <h2 className="mb-2.5 font-mono text-[10px] uppercase tracking-[0.18em] text-card-dim">
-                Written so far
-              </h2>
+              <Label>Written so far</Label>
               {written === 0 ? (
-                <p className="text-card-dim">
-                  Nothing drafted yet. {contacts.sendable.toLocaleString()} of{' '}
+                <p className="mt-2 text-dim">
+                  Nothing drafted. {contacts.sendable.toLocaleString()} of{' '}
                   {contacts.total.toLocaleString()} addresses can be written to at all.
                 </p>
               ) : (
                 <>
-                  <div className="flex h-1.5 overflow-hidden rounded-full bg-white/[0.07]">
+                  <div className="mt-2.5 flex h-1.5 overflow-hidden rounded-full bg-raise">
                     {(
                       [
-                        ['drafts', drafts, 'bg-white/30'],
-                        ['marked', flagged, 'bg-[#E0B45E]'],
-                        ['signed', approved, 'bg-[#8F8FFF]/60'],
-                        ['posted', sent, 'bg-[#8F8FFF]'],
+                        ['drafts', drafts, 'bg-dim/40'],
+                        ['marked', flagged, 'bg-primary'],
+                        ['signed', approved, 'bg-ink/45'],
+                        ['posted', sent, 'bg-ink'],
                       ] as const
                     ).map(([label, value, tone]) =>
                       value > 0 ? (
@@ -205,10 +220,10 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
                       ] as const
                     ).map(([label, value]) => (
                       <div key={label}>
-                        <dd className="font-serif text-[21px] leading-none text-card-ink">
+                        <dd className="text-[20px] font-medium leading-none tracking-[-0.03em]">
                           {value.toLocaleString()}
                         </dd>
-                        <dt className="mt-1 text-card-dim">{label}</dt>
+                        <dt className="mt-1 text-dim">{label}</dt>
                       </div>
                     ))}
                   </dl>
@@ -217,121 +232,79 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
             </section>
 
             <section>
-              <h2 className="mb-2.5 font-mono text-[10px] uppercase tracking-[0.18em] text-card-dim">
-                Today&rsquo;s postage
-              </h2>
-              {boxes.length === 0 ? (
-                <p className="text-card-dim">
-                  No post boxes — <code className="font-mono">npm run db:seed</code> adds the first
-                  two.
-                </p>
-              ) : (
-                <Meter boxes={boxes} />
-              )}
+              <Label>Today&rsquo;s postage</Label>
+              <div className="mt-2.5">
+                {boxes.length === 0 ? (
+                  <p className="text-dim">
+                    No post boxes — <code>npm run db:seed</code> adds the first two.
+                  </p>
+                ) : (
+                  <Meter boxes={boxes} />
+                )}
+              </div>
             </section>
           </div>
 
-          <div className="flex shrink-0 items-center gap-2 border-t border-card-line/70 px-4 py-3 text-card-dim">
-            <span
-              className={`size-1.5 rounded-full ${isConfigured() ? 'bg-[#8F8FFF]' : 'bg-card-dim'}`}
-              aria-hidden
-            />
-            {isConfigured() ? 'Gmail live — letters really go' : 'Dry run — nothing really goes'}
-            <span className="ml-auto font-mono text-[11px]">
-              {posting.length > 0 ? `${posting.length} posting` : 'idle'}
-            </span>
+          <div className="shrink-0 border-t border-line">
+            <div className="flex divide-x divide-line border-b border-line">
+              {[
+                ['/?view=book', 'Address book', view === 'book'],
+                ['/?view=boxes', 'Post boxes', view === 'boxes'],
+                ['/?view=returned', 'Returned', view === 'returned'],
+              ].map(([href, label, on]) => (
+                <Link
+                  key={href as string}
+                  href={href as string}
+                  className={`flex-1 truncate px-2 py-2.5 text-center transition-colors ${
+                    on ? 'bg-raise text-ink' : 'text-dim hover:bg-raise hover:text-ink'
+                  }`}
+                >
+                  {label as string}
+                </Link>
+              ))}
+            </div>
+            <p className="flex items-center gap-2 px-4 py-2.5 text-dim">
+              <span
+                className={`size-1.5 rounded-full ${isConfigured() ? 'bg-primary' : 'bg-dim'}`}
+                aria-hidden
+              />
+              {isConfigured() ? 'Gmail live — letters really go' : 'Dry run — nothing really goes'}
+            </p>
           </div>
         </aside>
 
-        {/* ── the sheet ────────────────────────────────────────────────────── */}
-        <ViewTransition enter="screen" exit="screen" default="none">
-          <div className="mx-auto flex min-h-0 w-full max-w-[880px] flex-1 flex-col">
-            {openId ? (
-              <LetterSheet id={openId} />
-            ) : view === 'book' ? (
-              <BookSheet sp={sp} />
-            ) : view === 'boxes' ? (
-              <BoxesSheet boxes={boxes} />
-            ) : view === 'returned' ? (
-              <ReturnedSheet />
-            ) : (
-              <DeskSheet rows={rows} contacts={contacts} />
-            )}
-          </div>
-        </ViewTransition>
+        {/* ── the letter ─────────────────────────────────────────────────────
+            The one object on the stage. Never unmounted, so however you have
+            turned it stays turned while panels come and go beside it. */}
+        <div className={`relative min-w-0 flex-1 ${hasPanel ? 'hidden 2xl:block' : 'hidden md:block'}`}>
+          <Letter progress={progress} />
+          <p className="pointer-events-none absolute inset-x-0 bottom-2 text-center text-dim">
+            {open ? open.campaign.name : 'Drag to turn it over'}
+          </p>
+        </div>
+
+        {/* ── the working panel ──────────────────────────────────────────── */}
+        {hasPanel && (
+          <ViewTransition enter="screen" exit="screen" default="none">
+            <div className="flex min-h-0 w-full flex-col md:max-w-[720px]">
+              {openId ? (
+                <LetterSheet id={openId} />
+              ) : view === 'book' ? (
+                <BookSheet sp={sp} />
+              ) : view === 'boxes' ? (
+                <BoxesSheet boxes={boxes} />
+              ) : (
+                <ReturnedSheet />
+              )}
+            </div>
+          </ViewTransition>
+        )}
       </div>
 
       <CommandBar campaignId={open?.campaign.id} campaignName={open?.campaign.name} />
 
       {BOOK_VIEWS.has(view) && <BookDrawers sp={sp} />}
     </>
-  )
-}
-
-/* ── the desk: every letter, and what stage it is at ──────────────────────── */
-
-function DeskSheet({
-  rows,
-  contacts,
-}: {
-  rows: Awaited<ReturnType<typeof listCampaigns>>
-  contacts: Awaited<ReturnType<typeof contactStats>>
-}) {
-  return (
-    <Sheet
-      label="The desk"
-      title="Letters"
-      note={`${contacts.sendable.toLocaleString()} of ${contacts.total.toLocaleString()} addresses can be written to.`}
-      actions={
-        <form action={newCampaign} className="flex items-end gap-2">
-          <label className="block">
-            <span className="sr-only">New letter name</span>
-            <input name="name" placeholder="Name a new letter" className={`${ruled} w-52`} />
-          </label>
-          <button className={go}>Start</button>
-        </form>
-      }
-    >
-      {rows.length === 0 ? (
-        <Empty
-          title="Nothing on the desk"
-          note={
-            <>
-              A letter is one message written once and personalised for each person on the list.
-              Name one above, or type <code className="font-mono text-ink">new autumn</code> below.
-            </>
-          }
-        />
-      ) : (
-        <Ledger>
-          {rows.map(({ campaign, drafts, flagged, approved, sent }) => {
-            const waiting = drafts + flagged
-            return (
-              <Link
-                key={campaign.id}
-                href={`/?c=${campaign.id}`}
-                className="group flex items-baseline gap-4 border-b border-rule/60 px-8 py-4 transition-colors hover:bg-ink/[0.03]"
-              >
-                <span className="min-w-0 flex-1 truncate font-serif text-[19px] group-hover:underline group-hover:decoration-rule group-hover:underline-offset-4">
-                  {campaign.name}
-                </span>
-                {flagged > 0 && <Stamp tone="flagged">{`${flagged} marked`}</Stamp>}
-                <Stamp tone={campaign.status}>{campaign.status}</Stamp>
-                <span className="w-44 shrink-0 text-right text-dim">
-                  {waiting > 0
-                    ? `${waiting} to read`
-                    : approved > 0
-                      ? `${approved} signed, ready`
-                      : sent > 0
-                        ? `${sent} posted`
-                        : 'nothing drafted'}
-                </span>
-              </Link>
-            )
-          })}
-        </Ledger>
-      )}
-    </Sheet>
   )
 }
 
@@ -346,8 +319,8 @@ async function LetterSheet({ id }: { id: string }) {
   const campaign = await getCampaign(id)
   if (!campaign)
     return (
-      <Sheet label="The desk" title="No such letter">
-        <Empty title="Not on the desk" note="It may have been thrown away." />
+      <Sheet label="Letter" title="Not on the desk">
+        <Empty title="No such letter" note="It may have been thrown away." />
       </Sheet>
     )
 
@@ -368,7 +341,7 @@ async function LetterSheet({ id }: { id: string }) {
       label="Letter"
       title={
         <span className="flex items-baseline gap-3">
-          <Link href="/" aria-label="Back to the desk" className="text-dim hover:text-ink">
+          <Link href="/" aria-label="Put it down" className="text-dim hover:text-primary">
             ←
           </Link>
           <span className="truncate">{campaign.name}</span>
@@ -379,20 +352,16 @@ async function LetterSheet({ id }: { id: string }) {
     >
       <div className="min-h-0 flex-1 overflow-auto">
         <Clause n={1} title="The message">
-          <form action={saveCampaignAction} className="max-w-2xl space-y-5">
+          <form action={saveCampaignAction} className="space-y-5">
             <input type="hidden" name="id" value={campaign.id} />
 
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="block">
-                <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-dim">
-                  Name
-                </span>
+                <Label>Name</Label>
                 <input name="name" defaultValue={campaign.name} className={`${ruled} mt-1`} />
               </label>
               <label className="block">
-                <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-dim">
-                  Subject
-                </span>
+                <Label>Subject</Label>
                 <input
                   name="subject_template"
                   defaultValue={campaign.subjectTemplate}
@@ -401,32 +370,25 @@ async function LetterSheet({ id }: { id: string }) {
               </label>
             </div>
 
-            {/* The letter as it will be posted: real stock, real serif, a page
-                width you can actually read. Everything around it is a control;
-                this is the thing a person receives. */}
             <label className="block">
-              <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-dim">
-                The body — {`{{${SLOT}}}`} is the one line the model writes
-              </span>
+              <Label>The body — {`{{${SLOT}}}`} is the one line the model writes</Label>
               <textarea
                 name="body_template"
-                rows={11}
+                rows={10}
                 defaultValue={campaign.bodyTemplate}
                 spellCheck={false}
-                className="mt-1.5 w-full resize-y rounded-[3px] border border-rule bg-white/70 px-5 py-4 font-serif text-[15px] leading-[1.75] transition-colors focus:border-ink/50"
+                className="mt-1.5 w-full resize-y rounded-[4px] border border-line bg-raise px-4 py-3.5 leading-[1.7] transition-colors focus:border-primary"
               />
             </label>
 
             {!hasSlot && (
-              <p className="text-mark">
+              <p className="text-primary">
                 The body has no {`{{${SLOT}}}`}, so there is nothing for the model to write.
               </p>
             )}
 
             <label className="block">
-              <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-dim">
-                What should that one line say?
-              </span>
+              <Label>What should that one line say?</Label>
               <textarea
                 name="prompt"
                 rows={3}
@@ -494,18 +456,13 @@ async function LetterSheet({ id }: { id: string }) {
                 <form action={approveAllClean} className="flex flex-wrap items-center gap-3">
                   <input type="hidden" name="id" value={campaign.id} />
                   <button className={quiet}>Sign the {tally.drafts} that passed both readers</button>
-                  <span className="text-dim">
-                    Marked ones are never signed in bulk — open each and decide.
-                  </span>
+                  <span className="text-dim">Marked ones are never signed in bulk.</span>
                 </form>
               )}
 
               {queue.map(({ message, contact }) => (
-                <article
-                  key={message.id}
-                  className="overflow-hidden rounded-[3px] border border-rule bg-white/70"
-                >
-                  <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 border-b border-rule px-5 py-3">
+                <article key={message.id} className="overflow-hidden rounded-[5px] border border-line">
+                  <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 border-b border-line bg-raise px-4 py-2.5">
                     <span className="font-medium">
                       {[contact.firstName, contact.lastName].filter(Boolean).join(' ') || 'Unnamed'}
                     </span>
@@ -521,7 +478,7 @@ async function LetterSheet({ id }: { id: string }) {
                   </div>
 
                   {message.validatorFlags.length > 0 && (
-                    <ul className="border-b border-rule bg-mark/[0.07] px-5 py-2.5 text-mark">
+                    <ul className="border-b border-line bg-primary/[0.06] px-4 py-2.5 text-primary">
                       {message.validatorFlags.map((flag) => (
                         <li key={flag}>
                           <strong className="font-medium">{flag}</strong> — {WHY[flag] ?? flag}
@@ -531,24 +488,22 @@ async function LetterSheet({ id }: { id: string }) {
                   )}
 
                   {message.error ? (
-                    <p className="px-5 py-3 text-stop">{message.error}</p>
+                    <p className="px-4 py-3 text-primary">{message.error}</p>
                   ) : (
                     <>
-                      <p className="border-b border-rule px-5 py-2.5">
-                        <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-dim">
-                          Subject{' '}
-                        </span>
+                      <p className="border-b border-line px-4 py-2.5">
+                        <span className="text-dim">Subject </span>
                         {message.subject}
                       </p>
                       {/* The only thing on this desk a real person will ever
                           read. Everything else defers to it. */}
-                      <pre className="whitespace-pre-wrap px-5 py-5 font-serif text-[15px] leading-[1.75]">
+                      <pre className="whitespace-pre-wrap px-4 py-4 font-sans text-[13.5px] leading-[1.7]">
                         {message.body}
                       </pre>
                     </>
                   )}
 
-                  <div className="flex gap-2 border-t border-rule px-5 py-3">
+                  <div className="flex gap-2 border-t border-line px-4 py-3">
                     <form action={approve}>
                       <input type="hidden" name="id" value={message.id} />
                       <button className={go} disabled={Boolean(message.error)}>
@@ -568,7 +523,7 @@ async function LetterSheet({ id }: { id: string }) {
 
         <Clause n={4} title="The post" note={`${tally.approved} signed · ${tally.sent} posted`}>
           <div className="space-y-4">
-            <p className="max-w-2xl text-dim">
+            <p className="text-dim">
               {active.length} active post {active.length === 1 ? 'box' : 'boxes'}, up to {capacity} a
               day between them, spread across 09:00–17:00. Catch-all addresses go only from a box
               flagged for them, capped at 10 a day. If a box bounces above 3% this letter stops on
@@ -580,8 +535,8 @@ async function LetterSheet({ id }: { id: string }) {
                 <input type="hidden" name="id" value={campaign.id} />
                 <button className={quiet}>Hold the post</button>
                 <span className="text-dim">
-                  <code className="font-mono">collect</code> works one collection by hand;{' '}
-                  <code className="font-mono">npm run send</code> works them on a timer.
+                  <code>collect</code> works one collection by hand; <code>npm run send</code> works
+                  them on a timer.
                 </span>
               </form>
             ) : (
@@ -596,10 +551,8 @@ async function LetterSheet({ id }: { id: string }) {
 
             {posted.length > 0 && (
               <div>
-                <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-dim">
-                  Postmarks
-                </p>
-                <ul className="space-y-1 font-mono text-[11.5px] text-dim">
+                <Label>Postmarks</Label>
+                <ul className="mt-2 space-y-1 text-[11.5px] tabular-nums text-dim">
                   {posted.map(({ message, contact }) => (
                     <li key={message.id} className="truncate">
                       {message.sentAt?.toISOString().slice(0, 16).replace('T', ' ')} → {contact.email}{' '}
@@ -660,7 +613,7 @@ async function BookSheet({ sp }: { sp: Params }) {
         </>
       }
     >
-      <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-rule px-8 py-3">
+      <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-line px-7 py-3">
         <Search />
         <Filter name="status" label="Any address status" options={emailStatus.enumValues} />
         <Filter name="consent" label="Any consent" options={consentStatus.enumValues} />
@@ -670,9 +623,7 @@ async function BookSheet({ sp }: { sp: Params }) {
       {list.rows.length === 0 ? (
         <Empty
           title={filtered ? 'Nothing matches' : 'The book is empty'}
-          note={
-            filtered ? 'Clear the filters to see the whole book.' : 'Take in a CSV of addresses to begin.'
-          }
+          note={filtered ? 'Clear the filters to see the whole book.' : 'Take in a CSV to begin.'}
         />
       ) : (
         <form action={suppressSelected} className="group flex min-h-0 flex-1 flex-col">
@@ -680,25 +631,24 @@ async function BookSheet({ sp }: { sp: Params }) {
             {list.rows.map((contact) => (
               <div
                 key={contact.id}
-                className="flex items-center gap-3 border-b border-rule/60 px-8 py-2.5 transition-colors hover:bg-ink/[0.03]"
+                className="flex items-center gap-3 border-b border-line px-7 py-2.5 transition-colors hover:bg-raise"
               >
                 <input
                   type="checkbox"
                   name="ids"
                   value={contact.id}
                   aria-label={`Select ${contact.email ?? contact.id}`}
-                  className="size-3.5 shrink-0 accent-ink"
+                  className="size-3.5 shrink-0 accent-primary"
                 />
                 <Link href={bookHref(sp, { contact: contact.id })} className="flex min-w-0 flex-1 gap-3">
-                  <span className="w-44 shrink-0 truncate font-medium">
+                  <span className="w-40 shrink-0 truncate font-medium">
                     {[contact.firstName, contact.lastName].filter(Boolean).join(' ') || (
-                      <span className="font-serif italic text-dim">
+                      <span className="italic text-dim">
                         {contact.erasedAt ? 'erased' : 'unnamed'}
                       </span>
                     )}
                   </span>
-                  <span className="w-56 shrink-0 truncate text-dim">{contact.email ?? '—'}</span>
-                  <span className="min-w-0 flex-1 truncate text-dim">{contact.company ?? '—'}</span>
+                  <span className="min-w-0 flex-1 truncate text-dim">{contact.email ?? '—'}</span>
                 </Link>
                 {contact.consentStatus === 'opted_in' && <Stamp tone="opted_in">opted in</Stamp>}
                 <Stamp tone={contact.emailStatus}>{contact.emailStatus}</Stamp>
@@ -707,7 +657,7 @@ async function BookSheet({ sp }: { sp: Params }) {
           </Ledger>
 
           {/* Appears only when something is ticked — a CSS :has() rule, no state. */}
-          <div className="hidden shrink-0 items-center gap-3 border-t border-rule bg-ink/[0.04] px-8 py-3 group-has-[input:checked]:flex">
+          <div className="hidden shrink-0 items-center gap-3 border-t border-line bg-raise px-7 py-3 group-has-[input:checked]:flex">
             <button className={ink}>Return the selected</button>
             <span className="text-dim">Permanent. They can never be written to again.</span>
           </div>
@@ -758,9 +708,9 @@ async function BookDrawers({ sp }: { sp: Params }) {
             </dl>
 
             {!selected.erasedAt && (
-              <form action={saveStatus} className="space-y-2.5 rounded-[3px] border border-rule p-4">
+              <form action={saveStatus} className="space-y-2.5 rounded-[5px] border border-line p-4">
                 <input type="hidden" name="id" value={selected.id} />
-                <p className="font-serif text-[17px]">May we write to them?</p>
+                <p className="font-medium">May we write to them?</p>
                 <p className="text-dim">
                   Only verified and catch-all can ever be written to, and catch-all only from a post
                   box flagged for it.
@@ -794,16 +744,16 @@ async function BookDrawers({ sp }: { sp: Params }) {
             )}
 
             <div>
-              <p className="mb-1 font-serif text-[17px]">What the CSV carried</p>
-              <p className="mb-2 text-dim">
+              <Label>What the CSV carried</Label>
+              <p className="mb-2 mt-1 text-dim">
                 Everything beyond the fields above. Personalisation may use only what is in here.
               </p>
-              <pre className="max-h-56 overflow-auto rounded-[3px] border border-rule bg-white/60 p-3 font-mono text-[11.5px]">
+              <pre className="max-h-56 overflow-auto rounded-[4px] border border-line bg-raise p-3 text-[11.5px]">
                 {JSON.stringify(selected.context, null, 2)}
               </pre>
             </div>
 
-            <div className="flex flex-wrap gap-2 border-t border-rule pt-5">
+            <div className="flex flex-wrap gap-2 border-t border-line pt-5">
               {selected.email && (
                 <form action={suppressEmail}>
                   <input type="hidden" name="email" value={selected.email} />
@@ -841,12 +791,12 @@ function BoxesSheet({ boxes }: { boxes: Box[] }) {
     >
       <Ledger>
         {boxes.map((box) => (
-          <div key={box.id} className="flex items-baseline gap-3 border-b border-rule/60 px-8 py-4">
-            <span className="min-w-0 flex-1 truncate font-serif text-[17px]">{box.email}</span>
+          <div key={box.id} className="flex items-center gap-3 border-b border-line px-7 py-3.5">
+            <span className="min-w-0 flex-1 truncate font-medium">{box.email}</span>
             {box.sendsCatchAll && <Stamp tone="catch_all">catch all · 10/day</Stamp>}
             {box.halted && <Stamp tone="halted">halted</Stamp>}
             {!box.active && <Stamp tone="paused">paused</Stamp>}
-            <span className="w-28 shrink-0 text-right font-mono text-[11.5px] text-dim">
+            <span className="w-24 shrink-0 text-right text-[11.5px] tabular-nums text-dim">
               {box.sentToday}/{box.cap} today
             </span>
           </div>
@@ -854,14 +804,10 @@ function BoxesSheet({ boxes }: { boxes: Box[] }) {
         {boxes.length === 0 && (
           <Empty
             title="No post boxes"
-            note={
-              <>
-                <code className="font-mono text-ink">npm run db:seed</code> adds the first two.
-              </>
-            }
+            note={<code>npm run db:seed adds the first two.</code>}
           />
         )}
-        <p className="px-8 py-6 text-dim">
+        <p className="px-7 py-6 text-dim">
           Before any of this goes for real: SPF, DKIM and DMARC on the sending domain, then a two to
           three week warm-up from about five a day up to the cap.
         </p>
@@ -881,14 +827,14 @@ async function ReturnedSheet() {
     <Sheet
       label="Returned"
       title="Never write to these"
-      note={`${blocks.length} entries. Stored as a hash, so a person can be erased and still never be written to. There is no way to remove one.`}
+      note={`${blocks.length} entries, stored as a hash — a person can be erased and still never be written to. There is no way to remove one.`}
       actions={
         <form action={blockDomain} className="flex items-end gap-2">
           <label className="block">
             <span className="sr-only">Domain to block</span>
-            <input name="domain" placeholder="competitor.com" className={`${ruled} w-44`} />
+            <input name="domain" placeholder="competitor.com" className={`${ruled} w-40`} />
           </label>
-          <select name="reason" defaultValue="competitor" className={`${ruled} w-28`}>
+          <select name="reason" defaultValue="competitor" className={`${ruled} w-24`}>
             <option value="competitor">Competitor</option>
             <option value="customer">Customer</option>
             <option value="manual">Other</option>
@@ -899,17 +845,15 @@ async function ReturnedSheet() {
     >
       <Ledger>
         {blocks.map((row) => (
-          <div key={row.id} className="flex items-center gap-3 border-b border-rule/60 px-8 py-2.5">
+          <div key={row.id} className="flex items-center gap-3 border-b border-line px-7 py-2.5">
             <span className="min-w-0 flex-1 truncate">
               {row.domain ? (
                 <span className="font-medium">@{row.domain}</span>
               ) : (
-                <span className="font-mono text-[11.5px] text-dim">
-                  {row.emailHash?.slice(0, 32)}…
-                </span>
+                <span className="text-[11.5px] text-dim">{row.emailHash?.slice(0, 32)}…</span>
               )}
             </span>
-            <Stamp tone={row.reason === 'unsubscribed' ? 'opted_in' : row.reason}>{row.reason}</Stamp>
+            <Stamp tone={row.reason}>{row.reason}</Stamp>
           </div>
         ))}
         {blocks.length === 0 && (
@@ -923,7 +867,7 @@ async function ReturnedSheet() {
 function Row({ label, value }: { label: string; value: string | null | undefined }) {
   return (
     <>
-      <dt className="font-mono text-[10px] uppercase tracking-[0.14em] text-dim">{label}</dt>
+      <dt className="text-[9.5px] uppercase tracking-[0.14em] text-dim">{label}</dt>
       <dd className="break-words">{value || '—'}</dd>
     </>
   )

@@ -13,7 +13,7 @@ import {
   startSending,
   suppressEmail,
 } from './actions'
-import { CardStamp } from './ui'
+import { Stamp } from './ui'
 
 /* ── The command line ─────────────────────────────────────────────────────────
    Every button on the paper has a word here, and both post to the same server
@@ -199,9 +199,9 @@ export function CommandBar({
   }
 
   return (
-    <div className="relative shrink-0 border-t border-card-line/70 px-5 py-2.5">
+    <div className="relative shrink-0 border-t border-line px-5 py-2.5">
       {matches.length > 0 && (
-        <ul className="card absolute inset-x-5 bottom-full mb-2 overflow-hidden rounded-[6px]">
+        <ul className="panel absolute inset-x-5 bottom-full mb-2 overflow-hidden rounded-[6px]">
           {matches.map((cmd, index) => (
             <li key={cmd.name}>
               <button
@@ -212,8 +212,8 @@ export function CommandBar({
                   setText(`${cmd.name} `)
                   box.current?.focus()
                 }}
-                className={`block w-full px-4 py-2 text-left font-mono text-[12px] transition-colors ${
-                  cmd === chosen ? 'bg-white/[0.07] text-card-ink' : 'text-card-dim hover:text-card-ink'
+                className={`block w-full px-4 py-2 text-left text-[12px] transition-colors ${
+                  cmd === chosen ? 'bg-raise text-ink' : 'text-dim hover:text-ink'
                 }`}
               >
                 {cmd.hint}
@@ -225,7 +225,7 @@ export function CommandBar({
 
       <div className="flex items-center gap-2.5">
         <span
-          className={`font-mono text-[13px] ${busy ? 'animate-pulse text-card-ink' : 'text-card-dim'}`}
+          className={`text-[13px] ${busy ? 'animate-pulse text-ink' : 'text-dim'}`}
           aria-hidden
         >
           {busy ? '•••' : '›'}
@@ -258,11 +258,11 @@ export function CommandBar({
           }}
           placeholder="write · sign · post · collect · find someone — or ⌘K"
           aria-label="Command"
-          className="min-w-0 flex-1 bg-transparent font-mono text-[12.5px] text-card-ink outline-none placeholder:font-sans placeholder:text-card-dim/80"
+          className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-dim/80"
         />
 
         {log.length > 0 && (
-          <p className="hidden min-w-0 max-w-[46%] truncate text-right font-mono text-[11px] text-card-dim md:block">
+          <p className="hidden min-w-0 max-w-[46%] truncate text-right text-[11px] text-dim md:block">
             {log[0]}
           </p>
         )}
@@ -319,7 +319,7 @@ export function Meter({ boxes }: { boxes: Box[] }) {
   const cap = live.reduce((total, box) => total + box.cap, 0)
   const sentToday = boxes.reduce((total, box) => total + box.sentToday, 0)
 
-  if (minute === null) return <div className="h-[150px] animate-pulse rounded-[3px] bg-white/[0.04]" />
+  if (minute === null) return <div className="h-[150px] animate-pulse rounded-[4px] bg-raise" />
 
   const owed = live.reduce((total, box) => total + allowanceNow(box.cap, box.sentToday, minute), 0)
   const before = minute < WINDOW.start
@@ -338,11 +338,11 @@ export function Meter({ boxes }: { boxes: Box[] }) {
   return (
     <div>
       <div className="flex items-baseline gap-2">
-        <span className="font-serif text-[30px] leading-none text-card-ink">{owed}</span>
-        <span className="min-w-0 flex-1 leading-tight text-card-dim">
+        <span className="text-[30px] font-medium leading-none tracking-[-0.03em] text-ink">{owed}</span>
+        <span className="min-w-0 flex-1 leading-tight text-dim">
           {owed === 1 ? 'may go out now' : 'may go out now'}
         </span>
-        <span className="font-mono text-[11px] text-card-dim">{clock(minute)}</span>
+        <span className="text-[11px] tabular-nums text-dim">{clock(minute)}</span>
       </div>
 
       <svg
@@ -359,15 +359,14 @@ export function Meter({ boxes }: { boxes: Box[] }) {
               y1={top}
               x2={m - WINDOW.start}
               y2={top + plot}
-              stroke="#2b2b30"
+              stroke="var(--color-line)"
               strokeWidth="1"
             />
             <text
               x={m - WINDOW.start}
               y={108}
-              fill="#8a8a8f"
+              fill="var(--color-dim)"
               fontSize="11"
-              fontFamily="var(--font-plex-mono)"
               textAnchor="middle"
             >
               {clock(m)}
@@ -376,22 +375,22 @@ export function Meter({ boxes }: { boxes: Box[] }) {
         ))}
 
         {/* The release ramp: how much postage each moment has unlocked. */}
-        <line x1="0" y1={y(0)} x2={SPAN} y2={y(cap)} stroke="#8f8fff" strokeWidth="1.5" opacity="0.45" />
+        <line x1="0" y1={y(0)} x2={SPAN} y2={y(cap)} stroke="var(--color-primary)" strokeWidth="1.5" opacity="0.45" />
 
         {/* What has actually gone out. The gap up to the ramp is the debt. */}
-        <line x1="0" y1={y(sentToday)} x2={x} y2={y(sentToday)} stroke="#f3f1ed" strokeWidth="1.5" />
+        <line x1="0" y1={y(sentToday)} x2={x} y2={y(sentToday)} stroke="var(--color-ink)" strokeWidth="1.5" />
 
         {!outside && (
           <>
-            <rect x={x - 0.5} y={top} width="1" height={plot} fill="#f3f1ed" opacity="0.2" />
-            <line x1={x} y1={y(sentToday)} x2={x} y2={y(unlocked)} stroke="#8f8fff" strokeWidth="3" />
-            <circle cx={x} cy={y(unlocked)} r="3.5" fill="#8f8fff" />
+            <rect x={x - 0.5} y={top} width="1" height={plot} fill="var(--color-ink)" opacity="0.2" />
+            <line x1={x} y1={y(sentToday)} x2={x} y2={y(unlocked)} stroke="var(--color-primary)" strokeWidth="3" />
+            <circle cx={x} cy={y(unlocked)} r="3.5" fill="var(--color-primary)" />
           </>
         )}
-        <circle cx={x} cy={y(sentToday)} r="3.5" fill="#f3f1ed" />
+        <circle cx={x} cy={y(sentToday)} r="3.5" fill="var(--color-ink)" />
       </svg>
 
-      <p className="text-card-dim">
+      <p className="text-dim">
         {outside
           ? `Outside ${clock(WINDOW.start)}–${clock(WINDOW.end)}, so nothing may go out${before ? ' yet' : ' today'}. Waiting is the rule working.`
           : `${sentToday} of ${cap} posted today, released evenly across the window.`}
@@ -403,19 +402,19 @@ export function Meter({ boxes }: { boxes: Box[] }) {
             box.active && !box.halted ? allowanceNow(box.cap, box.sentToday, minute) : 0
           return (
             <div key={box.id} className="flex items-center gap-2" title={box.email}>
-              <span className="min-w-0 flex-1 truncate text-card-ink">{box.email.split('@')[0]}</span>
+              <span className="min-w-0 flex-1 truncate text-ink">{box.email.split('@')[0]}</span>
               {box.halted ? (
-                <CardStamp tone="halted">halted</CardStamp>
+                <Stamp tone="halted">halted</Stamp>
               ) : !box.active ? (
-                <CardStamp tone="paused">paused</CardStamp>
+                <Stamp tone="paused">paused</Stamp>
               ) : box.sendsCatchAll ? (
-                <CardStamp tone="catch_all">catch all</CardStamp>
+                <Stamp tone="catch_all">catch all</Stamp>
               ) : null}
-              <span className="font-mono text-[11px] text-card-dim">
+              <span className="text-[11px] tabular-nums text-dim">
                 {box.sentToday}/{box.cap}
               </span>
               <span
-                className={`w-7 text-right font-mono text-[11px] ${allowance > 0 ? 'text-[#8f8fff]' : 'text-card-dim/60'}`}
+                className={`w-7 text-right text-[11px] tabular-nums ${allowance > 0 ? 'text-primary' : 'text-dim/60'}`}
               >
                 {allowance > 0 ? `+${allowance}` : '—'}
               </span>
@@ -477,7 +476,7 @@ export function Search({ placeholder = 'Search a name, company or address' }) {
         onChange={(event) => setValue(event.target.value)}
         placeholder={placeholder}
         aria-label={placeholder}
-        className="w-full border-0 border-b border-rule bg-transparent py-1.5 pl-6 transition-colors placeholder:text-dim/70 focus:border-ink"
+        className="w-full border-0 border-b border-line bg-transparent py-1.5 pl-6 transition-colors placeholder:text-dim/70 focus:border-primary"
       />
     </div>
   )
@@ -504,7 +503,7 @@ export function Filter({
       // An applied filter is a state, not an action — it inverts to ink rather
       // than going blue, so it never competes with the one forward button.
       className={`rounded-[3px] border py-1.5 pl-2 pr-7 capitalize transition-colors ${
-        value ? 'border-ink bg-ink text-paper' : 'border-rule bg-transparent text-dim hover:text-ink'
+        value ? 'border-ink bg-ink text-ground' : 'border-line bg-transparent text-dim hover:text-ink'
       }`}
     >
       <option value="">{label}</option>

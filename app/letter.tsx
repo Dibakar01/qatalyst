@@ -220,10 +220,12 @@ const hex = (value: string): [number, number, number] => {
 
 export default function Letter({ progress = 0 }: { progress?: number }) {
   const ref = useRef<HTMLCanvasElement>(null)
-  // Read by the frame loop rather than closed over, so a progress change never
-  // has to tear down the GL context.
+  // Read by the frame loop rather than closed over, so a progress change eases
+  // the flap open instead of tearing down the GL context and rebuilding it.
   const target = useRef(progress)
-  target.current = Math.min(Math.max(progress, 0), 1)
+  useEffect(() => {
+    target.current = Math.min(Math.max(progress, 0), 1)
+  }, [progress])
 
   useEffect(() => {
     const canvas = ref.current
@@ -261,7 +263,10 @@ export default function Letter({ progress = 0 }: { progress?: number }) {
         ['aUv', 2, 24],
         ['aKind', 1, 32],
       ] as const) {
+        // -1 means the compiler dropped it. Enabling that throws, which would
+        // take the whole letter out over an attribute nothing reads.
         const loc = gl.getAttribLocation(program, name)
+        if (loc < 0) continue
         gl.enableVertexAttribArray(loc)
         gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride, offset)
       }
@@ -370,7 +375,9 @@ export default function Letter({ progress = 0 }: { progress?: number }) {
       const scene = multiply(rotationY(yaw), rotationX(pitch))
       const models = [
         scene,
-        multiply(scene, multiply(translation(0, H / 2, D / 2), rotationX(opened * 2.25))),
+        // A hair proud of the face it closes onto, or the two co-planar
+        // surfaces fight for the same depth and the flap tears as it turns.
+        multiply(scene, multiply(translation(0, H / 2, D / 2 + 0.002), rotationX(opened * 2.25))),
         multiply(scene, translation(0, opened * H * 0.92, -0.004)),
       ]
 

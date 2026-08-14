@@ -60,18 +60,18 @@ export default function Importer() {
         <p className="text-dim">
           {fileName} — every one of the {rows.length} rows is accounted for below.
         </p>
-        <dl className="divide-y divide-rule rounded-[3px] border border-rule">
+        <dl className="divide-y divide-line rounded-[5px] border border-line">
           {lines.map(([label, value]) => (
             <div key={label} className="flex items-baseline justify-between px-4 py-3">
               <dt className={value === 0 ? 'text-dim' : ''}>{label}</dt>
-              <dd className="font-serif text-[21px] leading-none">{value}</dd>
+              <dd className="text-[20px] font-medium leading-none tracking-[-0.03em]">{value}</dd>
             </div>
           ))}
         </dl>
         {result.errors.length > 0 && (
           <div>
-            <p className="mb-1.5 font-serif text-[17px]">Why rows were rejected</p>
-            <pre className="max-h-40 overflow-auto rounded-[3px] border border-rule bg-white/60 p-3 font-mono text-[11.5px]">
+            <p className="mb-1.5 font-medium">Why rows were rejected</p>
+            <pre className="max-h-40 overflow-auto rounded-[5px] border border-line bg-raise p-3 text-[11.5px]">
               {result.errors.join('\n')}
             </pre>
           </div>
@@ -97,9 +97,9 @@ export default function Importer() {
 
   return (
     <div className="space-y-6">
-      <label className="block cursor-pointer rounded-[3px] border border-dashed border-rule bg-white/50 px-4 py-10 text-center transition-colors hover:border-ink/40 hover:bg-white/70">
+      <label className="block cursor-pointer rounded-[5px] border border-dashed border-line bg-raise px-4 py-10 text-center transition-colors hover:border-primary hover:bg-raise">
         <input type="file" accept=".csv,text/csv" onChange={onFile} className="sr-only" />
-        <span className="block font-serif text-[19px]">{fileName || 'Choose a CSV file'}</span>
+        <span className="block text-[17px] font-medium tracking-[-0.02em]">{fileName || 'Choose a CSV file'}</span>
         <span className="mt-1 block text-dim">
           {rows.length > 0
             ? `${rows.length} rows, ${headers.length} columns`
@@ -110,7 +110,7 @@ export default function Importer() {
       {rows.length > 0 && (
         <>
           <section>
-            <h3 className="mb-1.5 font-serif text-[17px]">Map the columns</h3>
+            <h3 className="mb-1.5 font-medium">Map the columns</h3>
             <p className="mb-3 text-dim">
               Headers are never guessed. Map at least an address or a LinkedIn URL — anything you
               leave unmapped is kept on the person as context, not discarded.
@@ -120,7 +120,7 @@ export default function Importer() {
                 <Fragment key={name}>
                   <label
                     htmlFor={`map-${name}`}
-                    className="font-mono text-[10px] uppercase tracking-[0.14em] text-dim"
+                    className="text-[9.5px] uppercase tracking-[0.16em] text-dim"
                   >
                     {name}
                   </label>
@@ -128,7 +128,7 @@ export default function Importer() {
                     id={`map-${name}`}
                     value={mapping[name] ?? ''}
                     onChange={(e) => setMapping({ ...mapping, [name]: e.target.value || undefined })}
-                    className="rounded-[3px] border border-rule bg-white/60 px-2 py-1.5"
+                    className="rounded-[5px] border border-line bg-raise px-2 py-1.5"
                   >
                     <option value="">— not mapped —</option>
                     {headers.map((header) => (
@@ -143,21 +143,21 @@ export default function Importer() {
           </section>
 
           <section>
-            <h3 className="mb-1.5 font-serif text-[17px]">First five rows</h3>
-            <div className="overflow-x-auto rounded-[3px] border border-rule">
+            <h3 className="mb-1.5 font-medium">First five rows</h3>
+            <div className="overflow-x-auto rounded-[5px] border border-line">
               <table className="w-full border-collapse whitespace-nowrap text-[12px]">
                 <thead>
-                  <tr className="bg-ink/[0.04]">
+                  <tr className="bg-raise">
                     {headers.map((header) => (
                       <th
                         key={header}
-                        className="border-b border-rule px-2.5 py-2 text-left font-medium"
+                        className="border-b border-line px-2.5 py-2 text-left font-medium"
                       >
                         {header}
                         {claimed.has(header) ? (
                           ''
                         ) : (
-                          <span className="ml-1.5 font-mono text-[10px] font-normal uppercase tracking-[0.12em] text-dim">
+                          <span className="ml-1.5 text-[9.5px] font-normal uppercase tracking-[0.14em] text-dim">
                             context
                           </span>
                         )}
@@ -169,7 +169,7 @@ export default function Importer() {
                   {rows.slice(0, 5).map((row, index) => (
                     <tr key={index}>
                       {headers.map((header) => (
-                        <td key={header} className="border-b border-rule/60 px-2.5 py-1.5">
+                        <td key={header} className="border-b border-line px-2.5 py-1.5">
                           {row[header]}
                         </td>
                       ))}
@@ -180,7 +180,7 @@ export default function Importer() {
             </div>
           </section>
 
-          <div className="flex flex-wrap items-center gap-3 border-t border-rule pt-5">
+          <div className="flex flex-wrap items-center gap-3 border-t border-line pt-5">
             <button onClick={run} disabled={!ready || busy} className={go}>
               {busy ? 'Taking them in…' : `Take in ${rows.length} rows`}
             </button>
