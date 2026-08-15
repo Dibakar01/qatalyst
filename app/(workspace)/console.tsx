@@ -438,7 +438,7 @@ export function Valve({ boxes }: { boxes: Box[] }) {
         aria-label={`${owed} may go out at ${clock(minute)}`}
       >
         {/* Hour marks. The window is the only part of the day that exists here. */}
-        {Array.from({ length: 5 }, (_, i) => WINDOW.start + (i * SPAN) / 4).map((m) => (
+        {Array.from({ length: 5 }, (_, i) => WINDOW.start + (i * SPAN) / 4).map((m, i, all) => (
           <g key={m}>
             <line
               x1={m - WINDOW.start}
@@ -448,7 +448,17 @@ export function Valve({ boxes }: { boxes: Box[] }) {
               stroke="var(--color-line)"
               strokeWidth="1"
             />
-            <text x={m - WINDOW.start} y={108} fill="var(--color-dim)" fontSize="11" textAnchor="middle">
+            {/* The first mark sits at x=0 and the last at the full width, so
+                centring their labels puts half of each outside the viewBox —
+                09:00 rendered as ":00" and 17:00 as "17:". The two ends anchor
+                inward; every mark between still centres on its own line. */}
+            <text
+              x={m - WINDOW.start}
+              y={108}
+              fill="var(--color-dim)"
+              fontSize="11"
+              textAnchor={i === 0 ? 'start' : i === all.length - 1 ? 'end' : 'middle'}
+            >
               {clock(m)}
             </text>
           </g>

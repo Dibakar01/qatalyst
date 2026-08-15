@@ -160,8 +160,14 @@ body {
    Bigger surfaces read as thicker: the panel blurs more and casts further than
    the small bar, because that is how depth is actually perceived. */
 .panel {
-  background: color-mix(in oklab, var(--color-panel) 86%, transparent);
-  backdrop-filter: blur(30px) saturate(180%);
+  /* Opaque enough to read on, and it no longer amplifies what is behind it.
+     `saturate(180%)` boosted the backdrop by eighty percent — invisible over a
+     neutral stage, and the moment the red letter sat behind one it bled across
+     the whole surface as soft clouds. The material is the blur and the
+     translucency; the saturation was decoration that only worked while nothing
+     colourful was underneath. */
+  background: color-mix(in oklab, var(--color-panel) 94%, transparent);
+  backdrop-filter: blur(30px) saturate(105%);
   box-shadow:
     0 0 0 1px var(--color-line),
     0 1px 0 color-mix(in oklab, var(--color-ink) 6%, transparent) inset,
@@ -171,8 +177,8 @@ body {
 /* Chrome is a lighter material than a working surface — it sits above content
    without competing with it. Never stack one of these on another. */
 .chrome {
-  background: color-mix(in oklab, var(--color-ground) 72%, transparent);
-  backdrop-filter: blur(22px) saturate(160%);
+  background: color-mix(in oklab, var(--color-ground) 82%, transparent);
+  backdrop-filter: blur(22px) saturate(105%);
 }
 
 /* A scroll edge, not a hard divider: content fades where it passes under

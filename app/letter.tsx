@@ -341,6 +341,7 @@ export default function Letter({
   cards,
   openId,
   listed = false,
+  covered = false,
   shift = 0,
 }: {
   cards: Card[]
@@ -348,6 +349,16 @@ export default function Letter({
   openId?: string
   /** The stack has been turned into a list, so it stands back out of the way. */
   listed?: boolean
+  /**
+   * A working surface is set down over the stage.
+   *
+   * The letter steps back and dims — it is context now, not the thing being
+   * worked on. Before this it did neither: `listed` and `openId` covered the
+   * list and the opened letter, but Reports, Sending and Settings set neither,
+   * so the letter stayed full size and full opacity directly behind a
+   * translucent panel and bled through it.
+   */
+  covered?: boolean
   /** Where the stack stands, in world units, so a panel can sit beside it
    *  rather than on top of it. Eased, so the letters walk across. */
   shift?: number
@@ -373,10 +384,22 @@ export default function Letter({
 
   // Everything the frame loop reads. Kept in a ref so new server data eases the
   // letters to their new state instead of tearing down the GL context.
-  const live = useRef({ cards, active, unfolded: Boolean(openId) || listed, shift })
+  const live = useRef({
+    cards,
+    active,
+    unfolded: Boolean(openId) || listed,
+    covered: covered || Boolean(openId) || listed,
+    shift,
+  })
   useEffect(() => {
-    live.current = { cards, active, unfolded: Boolean(openId) || listed, shift }
-  }, [cards, active, openId, listed, shift])
+    live.current = {
+      cards,
+      active,
+      unfolded: Boolean(openId) || listed,
+      covered: covered || Boolean(openId) || listed,
+      shift,
+    }
+  }, [cards, active, openId, listed, covered, shift])
 
   const go = useRef<(to: 'open' | 'mark') => void>(() => {})
   useEffect(() => {
@@ -503,6 +526,9 @@ export default function Letter({
     let opened = 0
     let shown = live.current.active
     let unfold = live.current.unfolded ? 1 : 0
+    // How far the letter has stepped back under a working surface. Eased on
+    // its own so opening a panel is a movement rather than a jump.
+    let behind = live.current.covered ? 1 : 0
     let placed = live.current.shift
 
     let dragging = false
@@ -634,9 +660,10 @@ export default function Letter({
     function draw(now: number) {
       const dt = Math.min((now - previous) / 16.667, 4)
       previous = now
-      const { cards: deck, active: want, unfolded, shift: wantShift } = live.current
+      const { cards: deck, active: want, unfolded, covered: isCovered, shift: wantShift } = live.current
 
       unfold = still ? (unfolded ? 1 : 0) : ease(unfold, unfolded ? 1 : 0, 0.09, dt)
+      behind = still ? (isCovered ? 1 : 0) : ease(behind, isCovered ? 1 : 0, 0.09, dt)
 
       if (dragging) {
         // 1:1 with the finger, with progressive resistance past either end so
@@ -703,7 +730,13 @@ export default function Letter({
       const reach = Math.max(H / 2, (H - 0.08) / 2 + opened * H * 0.92)
       const span = Math.max(W / 2, (W - 0.16) / 2) / Math.max(width / height, 0.1)
       const back =
-        Math.max(3.5, (Math.max(reach, span) / Math.tan(FOV / 2)) * FIT) + unfold * 0.35
+        Math.max(3.5, (Math.max(reach, span) / Math.tan(FOV / 2)) * FIT) +
+        unfold * 0.35 +
+        // Straight back, not aside. A panel to one side and the object to the
+        // other makes the eye cross the screen for every reading; stepping
+        // away keeps it as context without competing — and keeps it out from
+        // under a translucent surface it would otherwise show through.
+        behind * 1.6
 
       // And look at the middle of it, not at the envelope.
       // The content runs from the envelope's bottom edge to the top of the
@@ -745,7 +778,13 @@ export default function Letter({
           multiply(model, translation(0, lid * H * 0.92, -0.004)),
         ]
 
-        gl!.uniform1f(uFade, 1 - Math.min(Math.abs(rel) / (NEIGHBOURS + 0.6), 1))
+        // Neighbours fade with distance; every letter fades under a working
+        // surface. Multiplied rather than replaced, so a neighbour behind a
+        // panel is dimmer than either rule alone would make it.
+        gl!.uniform1f(
+          uFade,
+          (1 - Math.min(Math.abs(rel) / (NEIGHBOURS + 0.6), 1)) * (1 - behind * 0.72),
+        )
         gl!.uniform1f(uCode, deck[i].code)
 
         parts.forEach((part, p) => {
@@ -806,7 +845,7 @@ export default function Letter({
               x: clamp((foot[0] / foot[3] / 2 + 0.5) * width, 90, width - 90),
               // Below the edge, and never so low it reaches the command bar.
               y: clamp((0.5 - foot[1] / foot[3] / 2) * height + 34, 40, height - 34),
-              on: unfold < 0.06,
+              on: unfold < 0.06 && behind < 0.5,
             }
           }
 
@@ -821,7 +860,7 @@ export default function Letter({
               // The width of the address block on screen, which is the whole
               // point of projecting two points instead of one.
               w: Math.abs(bx - ax),
-              on: facing > 0 && unfold < 0.06,
+              on: facing > 0 && unfold < 0.06 && behind < 0.5,
             }
           }
         }

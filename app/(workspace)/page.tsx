@@ -410,10 +410,11 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
               cards={cards}
               openId={openId || undefined}
               listed={listed || making}
-              // Steps aside for the panel rather than hiding behind it.
-              // Straight back, not aside. A panel to one side and the object
-              // to the other makes the eye cross the screen for every reading;
-              // pushing it away keeps it as context without competing.
+              // Any working surface pushes it back, not just an opened letter
+              // or the list. Reports, Sending and Settings set neither of
+              // those, so the letter used to sit full size behind a
+              // translucent panel and show through it.
+              covered={hasPanel}
               shift={0}
             />
           )}
@@ -936,8 +937,15 @@ async function LetterSheet({
       )}
 
       <div className="quiet-scroll min-h-0 flex-1 p-6">
+        {/* `min-h-full` rather than `h-full` on the form below.
+            `h-full` pinned it to the panel and let flex divide what was left —
+            and once the fixed rows added up to more than the height, what was
+            left was 22px, so the body collapsed to a single line while
+            everything else kept its size. Filling the panel when there is room
+            and growing past it when there is not lets the surface scroll,
+            which is what its container was already built to do. */}
         {clause === 1 && (
-          <form action={saveCampaignAction} className="flex h-full flex-col gap-5">
+          <form action={saveCampaignAction} className="flex min-h-full flex-col gap-5">
             <input type="hidden" name="id" value={campaign.id} />
 
             <div className="grid shrink-0 gap-5 sm:grid-cols-2">
@@ -950,33 +958,27 @@ async function LetterSheet({
                 <input name="subject_template" defaultValue={campaign.subjectTemplate} className={ruled} />
               </label>
 
-              <label className="flex flex-col gap-2">
-                <Label>Where the link lands</Label>
-                <input
-                  name="destination_url"
-                  defaultValue={campaign.destinationUrl ?? ''}
-                  placeholder="https://qalakaar.com/start"
-                  className={ruled}
-                />
-                {/* Resolved when the link is clicked, never baked into the
-                    body — so changing this fixes letters already sitting in
-                    inboxes. Adding a destination does not put a link in the
-                    body, and without one the report reads as broken rather
-                    than empty, so say it here. */}
-                <span className="text-dim">
-                  {campaign.destinationUrl && !campaign.bodyTemplate.includes('{{link}}') ? (
-                    <span className="text-primary">
-                      Nothing links there yet — put <code>{'{{link}}'}</code> in the body.
-                    </span>
-                  ) : (
-                    <>
-                      Empty sends them to the enquiry form. Changing it also changes letters
-                      already sent.
-                    </>
-                  )}
-                </span>
-              </label>
             </div>
+
+            {/* Its own row, not a third cell in a two-column grid — which left
+                an empty square beside it and took its height straight out of
+                the body below. Resolved when the link is clicked rather than
+                baked into the body, so changing it fixes letters already
+                sitting in inboxes. */}
+            <label className="flex shrink-0 items-baseline gap-3">
+              <Label>Link lands</Label>
+              <input
+                name="destination_url"
+                defaultValue={campaign.destinationUrl ?? ''}
+                placeholder="https://qalakaar.com/start — empty goes to the enquiry form"
+                className={`${ruled} min-w-0 flex-1`}
+              />
+              {campaign.destinationUrl && !campaign.bodyTemplate.includes('{{link}}') && (
+                <span className="shrink-0 text-primary">
+                  no <code>{'{{link}}'}</code> in the body
+                </span>
+              )}
+            </label>
 
             <label className="flex min-h-0 flex-1 flex-col gap-2">
               <Label>The body — {`{{${SLOT}}}`} is the one line the model writes</Label>
@@ -984,7 +986,7 @@ async function LetterSheet({
                 name="body_template"
                 defaultValue={campaign.bodyTemplate}
                 spellCheck={false}
-                className="min-h-0 w-full flex-1 resize-none rounded-[4px] border border-line bg-raise px-3 py-2 leading-[1.7] transition-colors focus:border-primary"
+                className="min-h-[10rem] w-full flex-1 resize-none rounded-[4px] border border-line bg-raise px-3 py-2 leading-[1.7] transition-colors focus:border-primary"
               />
             </label>
 
