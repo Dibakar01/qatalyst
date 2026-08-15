@@ -269,10 +269,46 @@ test('practice survives a save, and is only ever a boolean', () => {
   assert.equal(clampTuning({ practice: 'no' }, SAFE).practice, false)
 })
 
+/* where a tracked link may land --------------------------------------------- */
+
+const { safeDestination } = await import('./destination.ts')
+const OURS = ['qalakaar.com', 'app.qalakaar.com']
+
+test('a destination must be somewhere we control', () => {
+  assert.equal(safeDestination('https://qalakaar.com/start', OURS), 'https://qalakaar.com/start')
+  assert.equal(safeDestination('/enquire', OURS), '/enquire', 'a relative path is ours by definition')
+  // A subdomain of an allowed host is ours; a host that merely ends with the
+  // same letters is not — the leading dot is what makes that true.
+  assert.equal(safeDestination('https://go.qalakaar.com/x', OURS), 'https://go.qalakaar.com/x')
+  assert.equal(safeDestination('https://qalakaar.com.evil.com/x', OURS), null)
+  assert.equal(safeDestination('https://notqalakaar.com/x', OURS), null)
+})
+
+test('an unknown destination becomes the enquiry form, never a redirect', () => {
+  // `/r/` builds new URL(destination, req.url) and an absolute URL beats the
+  // base — so anything unvetted here is an open redirect that also hands over
+  // the reader's signed token.
+  assert.equal(safeDestination('https://evil.com/phish', OURS), null)
+  assert.equal(safeDestination('//evil.com/phish', OURS), null, 'protocol-relative is absolute')
+  assert.equal(safeDestination('javascript:alert(1)', OURS), null)
+  assert.equal(safeDestination('data:text/html,<script>', OURS), null)
+  assert.equal(safeDestination('not a url at all', OURS), null)
+})
+
+test('an empty destination is null, which means the enquiry form', () => {
+  assert.equal(safeDestination('', OURS), null)
+  assert.equal(safeDestination('   ', OURS), null)
+  assert.equal(safeDestination(null, OURS), null)
+  assert.equal(safeDestination(undefined, OURS), null)
+  // Nothing configured allows nothing absolute, and still allows our own paths.
+  assert.equal(safeDestination('https://qalakaar.com/x', []), null)
+  assert.equal(safeDestination('/enquire', []), '/enquire')
+})
+
 /* who gets the credit ------------------------------------------------------- */
 
 const { attribute } = await import('./attribute.ts')
-const { parseOrigins, originAllowed } = await import('./origins.ts')
+const { parseOrigins, originAllowed, parseKeys, keyAllowed } = await import('./origins.ts')
 
 const ADA = '11111111-1111-1111-1111-111111111111'
 const BOB = '22222222-2222-2222-2222-222222222222'
@@ -351,6 +387,28 @@ test('an unset allowlist allows nothing', () => {
   assert.deepEqual(parseOrigins(''), [], 'empty is not a wildcard')
   assert.equal(originAllowed('https://qalakaar.com', []), false, 'and allows nobody')
   assert.equal(originAllowed(null, ['https://qalakaar.com']), false, 'no Origin header, no entry')
+})
+
+test('an Origin alone cannot authenticate a write', () => {
+  // A browser sets Origin; curl sets it to whatever it likes. The key is the
+  // part a prober does not have — not secret, since it ships in page source,
+  // but enough that the endpoint is not simply open.
+  const keys = parseKeys(' pk_live_one , pk_live_two ')
+  assert.deepEqual(keys, ['pk_live_one', 'pk_live_two'], 'trimmed, deduped')
+
+  assert.equal(keyAllowed('pk_live_one', keys), true, 'a known key')
+  assert.equal(keyAllowed('pk_live_wrong', keys), false, 'an unknown one')
+  assert.equal(keyAllowed('pk_live_on', keys), false, 'a prefix is not a match')
+  assert.equal(keyAllowed('', keys), false)
+  assert.equal(keyAllowed(null, keys), false)
+})
+
+test('an unset key list accepts nothing', () => {
+  // The same reasoning as the origin allowlist: unset meaning "everyone" turns
+  // a missed deployment step into an open write endpoint.
+  assert.deepEqual(parseKeys(undefined), [])
+  assert.equal(keyAllowed('anything', []), false, 'and no key opens it')
+  assert.equal(keyAllowed('anything', parseKeys('')), false)
 })
 
 /* what Google says --------------------------------------------------------- */

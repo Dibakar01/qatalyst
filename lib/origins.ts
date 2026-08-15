@@ -1,3 +1,5 @@
+import { timingSafeEqual } from 'node:crypto'
+
 /**
  * Which sites may report conversions.
  *
@@ -43,4 +45,38 @@ export function parseOrigins(raw: string | undefined | null): string[] {
 export function originAllowed(origin: string | null | undefined, allowlist: string[]) {
   if (!origin || allowlist.length === 0) return false
   return allowlist.includes(canonical(origin))
+}
+
+/**
+ * The public write key the pixel carries.
+ *
+ * `Origin` is a CSRF defence, not authentication — a browser sets it and curl
+ * sets it to whatever it likes. Without a second factor `/api/collect` is an
+ * open write endpoint on the internet: anyone could fabricate revenue and, until
+ * `advance()` was gated, permanently mark a real contact a customer.
+ *
+ * This key is *not* a secret in the way `INGEST_SECRET` is — it ships in page
+ * source and that is fine. What it buys is real: an untargeted prober has
+ * nothing to send, and one site can be revoked without touching the others.
+ */
+export function parseKeys(raw: string | undefined | null): string[] {
+  if (!raw) return []
+  return [...new Set(raw.split(',').map((k) => k.trim()).filter(Boolean))]
+}
+
+/**
+ * Whether this key is one of ours.
+ *
+ * Compared in constant time per candidate. A public key is not worth a timing
+ * attack, but the comparison is cheap and it means nobody has to reason about
+ * whether it was worth it.
+ */
+export function keyAllowed(key: string | null | undefined, keys: string[]) {
+  if (!key || keys.length === 0) return false
+  const given = Buffer.from(key)
+  return keys.some((known) => {
+    const candidate = Buffer.from(known)
+    if (candidate.length !== given.length) return false
+    return timingSafeEqual(candidate, given)
+  })
 }

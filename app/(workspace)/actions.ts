@@ -29,6 +29,7 @@ import { generateForCampaign } from '@/lib/generate'
 import { KINDS, shape, type Kind } from '@/lib/compose'
 import { batchSize, nextAction } from '@/lib/rules'
 import { sendTick } from '@/lib/send'
+import { safeDestination } from '@/lib/destination'
 import { addDomain, setDomainActive, setWarming } from '@/lib/domains'
 import { moveStage, tag, type Stage } from '@/lib/segments'
 import { fromClock, saveTuning, tuning } from '@/lib/settings'
@@ -167,6 +168,11 @@ export async function saveCampaignAction(formData: FormData) {
     subjectTemplate: field(formData, 'subject_template'),
     bodyTemplate: String(formData.get('body_template') ?? ''),
     prompt: String(formData.get('prompt') ?? ''),
+    // Validated before it is stored, not at redirect time. `/r/` builds
+    // `new URL(destination, req.url)`, where an absolute URL wins over the
+    // base — so an unchecked value here turns a link inside our own email into
+    // a redirect to anywhere, carrying the reader's signed token with it.
+    destinationUrl: safeDestination(field(formData, 'destination_url')),
   })
   refresh()
 }

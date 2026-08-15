@@ -102,6 +102,7 @@ export async function saveCampaign(id: string, patch: Partial<Campaign>) {
       prompt: patch.prompt,
       audienceSegments: patch.audienceSegments,
       audienceStages: patch.audienceStages,
+      destinationUrl: patch.destinationUrl,
     })
     .where(eq(campaigns.id, id))
 }

@@ -56,6 +56,8 @@ export async function POST(req: Request) {
       // number and a renewal counts as revenue rather than being discarded as
       // a duplicate. Omit it and this dedupes on (contact, event) as before.
       eventId: body.event_id ? String(body.event_id) : null,
+      // This route proved itself with INGEST_SECRET, so it may move a stage.
+      trusted: true,
       value,
       currency: body.currency ? String(body.currency) : null,
       at: body.at ? new Date(String(body.at)) : undefined,

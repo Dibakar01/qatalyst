@@ -41,6 +41,7 @@ const PIXEL = `(function () {
     for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) body[k] = extra[k]
     body.event = event
     body.click = click
+    body.key = KEY_VALUE
 
     var payload = JSON.stringify(body)
 

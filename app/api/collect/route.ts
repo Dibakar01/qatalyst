@@ -1,5 +1,5 @@
 import { recordConversion, type ConversionEvent } from '@/lib/funnel'
-import { originAllowed, parseOrigins } from '@/lib/origins'
+import { keyAllowed, originAllowed, parseKeys, parseOrigins } from '@/lib/origins'
 import { readLink } from '@/lib/token'
 
 /**
@@ -28,15 +28,32 @@ const done = (origin?: string) =>
       : { vary: 'Origin' },
   })
 
+/** A conversion report is small. Anything larger is not one. */
+const MAX_BODY = 4 * 1024
+
 export async function POST(req: Request) {
   const origin = req.headers.get('origin')
-  const allowed = parseOrigins(process.env.SITE_ORIGINS)
-  if (!originAllowed(origin, allowed)) return done()
+  if (!originAllowed(origin, parseOrigins(process.env.SITE_ORIGINS))) return done()
+
+  // Refuse before reading, when the sender declares a size.
+  const declared = Number(req.headers.get('content-length') ?? 0)
+  if (declared > MAX_BODY) return done(origin!)
 
   try {
     // Sent as text/plain so `sendBeacon` need not preflight, so it is parsed
     // here rather than by the framework.
-    const body = JSON.parse(await req.text()) as Record<string, unknown>
+    const text = await req.text()
+    if (text.length > MAX_BODY) return done(origin!)
+    const body = JSON.parse(text) as Record<string, unknown>
+
+    // `Origin` alone is not authentication — a browser sets it, and curl sets
+    // it to anything. Without this key the endpoint is an open write on the
+    // internet: fabricated revenue in your reports from a one-line request.
+    // The key is not secret (it ships in page source); it stops an untargeted
+    // prober and lets one site be revoked without touching the others.
+    if (!keyAllowed(body.key ? String(body.key) : null, parseKeys(process.env.SITE_KEYS))) {
+      return done(origin!)
+    }
 
     const event = String(body.event ?? '')
     if (!EVENTS.includes(event as ConversionEvent)) return done(origin!)
@@ -61,6 +78,9 @@ export async function POST(req: Request) {
       // losing the conversion over it.
       value: value !== null && Number.isInteger(value) ? value : null,
       currency: body.currency ? String(body.currency) : null,
+      // Deliberately absent: this caller is authenticated by a key that ships
+      // in page source, so it may report a conversion and may not move a
+      // contact along the pipeline. `advance()` never goes backwards.
     })
   } catch {
     // Malformed JSON, an unknown address, a database hiccup. None of it is

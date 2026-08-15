@@ -112,7 +112,14 @@ export async function recordEnquiry(input: NewEnquiry) {
     .returning()
 
   // They wrote back — the pipeline learns that without anyone typing it.
-  if (contactId) await advance(contactId, 'replied')
+  //
+  // Only on a *traced* enquiry. An untraced one is matched on the address
+  // alone, which anybody who knows a prospect's email can supply from a public
+  // form: that would move a real contact to `replied` permanently, and
+  // `audienceWhere` then excludes them from every future campaign. The enquiry
+  // is still recorded either way — it is the stage change that needs evidence
+  // stronger than "someone typed this address".
+  if (contactId && trace) await advance(contactId, 'replied')
 
   await db.insert(events).values({
     contactId,
@@ -177,6 +184,19 @@ export async function recordConversion(input: {
   event: ConversionEvent
   /** The caller's id for this transaction — an invoice number is the natural one. */
   eventId?: string | null
+  /**
+   * Whether the caller proved who it is.
+   *
+   * A conversion report is an *observation* and anyone may make one; moving a
+   * contact along the pipeline is a *decision* and only a trusted caller may.
+   * The browser pixel is authenticated by a key that ships in page source, so
+   * it reports and nothing more. `/api/conversion` carries a bearer secret and
+   * may decide.
+   *
+   * Defaults to false so a new caller has to ask for the power rather than
+   * inherit it by forgetting.
+   */
+  trusted?: boolean
   value?: number | null
   currency?: string | null
   at?: Date
@@ -226,7 +246,12 @@ export async function recordConversion(input: {
 
   // Paying is the strongest signal the pipeline can get, and the machine
   // should not need a person to type it in.
-  if (contact && input.event === 'subscribed') await advance(contact.id, 'customer')
+  // Only a trusted caller moves the pipeline. `advance()` never goes backwards,
+  // so an unauthenticated stranger doing this would permanently mark a real
+  // contact a customer, and nothing in the app can undo it.
+  if (input.trusted && contact && input.event === 'subscribed') {
+    await advance(contact.id, 'customer')
+  }
 
   return {
     recorded: Boolean(row),
