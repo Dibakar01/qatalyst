@@ -7,7 +7,8 @@ import Papa from 'papaparse'
 import { db, sql } from '../db/index.ts'
 import { campaigns, contacts, events, mailboxes, messages, suppressions } from '../db/schema.ts'
 import { eraseContact, runImport } from '../lib/contacts.ts'
-import { sendTick } from '../lib/send.ts'
+import { addDomain } from '../lib/domains.ts'
+import { allMailboxStats, sendTick } from '../lib/send.ts'
 import type { Mapping, Row } from '../lib/csv.ts'
 import { emailHash, isSuppressed, suppress } from '../lib/suppression.ts'
 import { makeToken, readToken } from '../lib/token.ts'
@@ -210,6 +211,49 @@ assert.equal(later('s@example.test').error, 'suppressed before sending')
 assert.equal(later('u@example.test').status, 'approved', 'unverified is left alone, never sent')
 assert.equal(afterSecond.filter((m) => m.status === 'sent').length, 2, 'still only two sent')
 ok('suppression stops a delivery at send time, not just at import')
+
+/* warm-up counts against the cap it exists to respect ─────────────────────────
+   The bug this guards: warm-up wrote to `warmups` while every allowance counter
+   read `messages`, so the tally survived one tick and died with the in-memory
+   Map. A mailbox capped at five could send one per tick all day — on the order
+   of 480 — from the very domain the warm-up exists to protect. Within a single
+   tick it always looked correct, which is why it has to be checked across a
+   fresh read. */
+{
+  await db.execute(raw`delete from warmups where from_mailbox like '%@warmcap-%'`)
+  await db.execute(raw`delete from mailboxes where email like '%@warmcap-%'`)
+  await db.execute(raw`delete from domains where name like 'warmcap-%'`)
+
+  for (const n of [1, 2]) {
+    await addDomain({ name: `warmcap-${n}.test`, prefixes: ['a'], cap: 40, domainCap: 250 })
+  }
+
+  const box = 'a@warmcap-1.test'
+  const [{ id }] = await db.execute<{ id: string }>(raw`
+    select id::text from mailboxes where email = ${box}`)
+
+  // Late in the window, so the ramp has released most of the day's allowance.
+  const late = nextWeekday()
+  late.setHours(16, 30, 0, 0)
+
+  for (let i = 0; i < 12; i++) await sendTick(late)
+
+  const [{ written }] = await db.execute<{ written: number }>(raw`
+    select count(*)::int written from warmups where from_mailbox = ${box}`)
+  const counted = (await allMailboxStats(late)).get(id)?.sentToday ?? 0
+
+  assert.ok(written > 0, 'the check is worthless if no warm-up was attempted')
+  assert.equal(counted, written, 'a fresh stats read counts warm-up — this was always 0')
+  assert.ok(
+    written <= 12,
+    `warm-up stopped at ${written} rather than one per tick`,
+  )
+  ok('warm-up is counted against the cap across a fresh stats read')
+
+  await db.execute(raw`delete from warmups where from_mailbox like '%@warmcap-%'`)
+  await db.execute(raw`delete from mailboxes where email like '%@warmcap-%'`)
+  await db.execute(raw`delete from domains where name like 'warmcap-%'`)
+}
 
 await sql.end()
 console.log('\nphase 1-3 acceptance: all checks passed')

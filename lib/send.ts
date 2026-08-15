@@ -78,7 +78,50 @@ export async function allMailboxStats(now = new Date()): Promise<Map<string, Mai
     .where(isNotNull(messages.mailboxId))
     .groupBy(messages.mailboxId)
 
-  return new Map(rows.map((r) => [r.mailboxId!, r]))
+  const stats = new Map<string, MailboxStats>(
+    rows.map((r) => [
+      r.mailboxId!,
+      {
+        sentToday: r.sentToday,
+        catchAllToday: r.catchAllToday,
+        sentEver: r.sentEver,
+        bouncedEver: r.bouncedEver,
+      },
+    ]),
+  )
+
+  // Warm-up counts. It is real mail from a real mailbox, and it was invisible
+  // here — warm-up writes to `warmups` while every counter read `messages`, so
+  // the tally lived only in the in-memory increment and died with this Map on
+  // the next tick. A mailbox whose warm-up cap is 5 could therefore send one
+  // per tick, all day: on the order of 480, uncounted, from the very domain
+  // the warm-up exists to protect.
+  const warm = await db
+    .select({
+      mailbox: warmups.fromMailbox,
+      sent: raw<number>`count(*)`.mapWith(Number),
+    })
+    .from(warmups)
+    .where(raw`${warmups.sentAt}::date = ${localDay(now)}::date`)
+    .groupBy(warmups.fromMailbox)
+
+  if (warm.length > 0) {
+    // `warmups` records the address; the counters are keyed by mailbox id.
+    const byEmail = new Map(
+      (await db.select({ id: mailboxes.id, email: mailboxes.email }).from(mailboxes)).map((m) => [
+        m.email,
+        m.id,
+      ]),
+    )
+    for (const row of warm) {
+      const id = byEmail.get(row.mailbox)
+      if (!id) continue
+      const current = stats.get(id) ?? noStats()
+      stats.set(id, { ...current, sentToday: current.sentToday + row.sent })
+    }
+  }
+
+  return stats
 }
 
 /**
@@ -100,7 +143,28 @@ export async function domainSentToday(now = new Date()): Promise<Map<string, num
     .where(isNotNull(mailboxes.domainId))
     .groupBy(mailboxes.domainId)
 
-  return new Map(rows.map((r) => [r.domainId!, r.sent]))
+  const total = new Map(rows.map((r) => [r.domainId!, r.sent]))
+
+  // And warm-up against the domain ceiling too. This is the number that
+  // protects the asset: a domain's reputation does not distinguish between a
+  // campaign send and one mailbox writing to another.
+  const warm = await db
+    .select({
+      domainId: mailboxes.domainId,
+      sent: raw<number>`count(*)`.mapWith(Number),
+    })
+    .from(warmups)
+    .innerJoin(mailboxes, eq(mailboxes.email, warmups.fromMailbox))
+    .where(
+      and(isNotNull(mailboxes.domainId), raw`${warmups.sentAt}::date = ${localDay(now)}::date`),
+    )
+    .groupBy(mailboxes.domainId)
+
+  for (const row of warm) {
+    total.set(row.domainId!, (total.get(row.domainId!) ?? 0) + row.sent)
+  }
+
+  return total
 }
 
 /**
@@ -399,8 +463,16 @@ async function warmTick(
         fromMailbox: mailbox.email,
         toMailbox: to,
         messageIdHeader: delivery.messageIdHeader,
+        // Stamped with the tick's clock, not the database's. The counters
+        // filter on this date against the same `now`, so letting the column
+        // default would let writer and reader disagree about which day a send
+        // belongs to — and the send path already passes `sentAt: now` for
+        // exactly this reason.
+        sentAt: now,
       })
-      // Counted against the same allowance the real post draws on.
+      // Kept current within the tick as well. The row written above is what
+      // the next tick's `allMailboxStats` will count; this is only so several
+      // mailboxes in *this* pass do not each read the same stale total.
       counts.sentToday++
       if (domain) perDomain.set(domain.id, (perDomain.get(domain.id) ?? 0) + 1)
       result.detail.push(`${mailbox.email} -> ${to} (warming)`)
