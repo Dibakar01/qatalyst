@@ -2,7 +2,8 @@ import { and, eq, inArray, isNull, sql as raw } from 'drizzle-orm'
 import { db } from '../db/index.ts'
 import { campaigns, contacts, events, mailboxes, messages } from '../db/schema.ts'
 import { deliver, isConfigured } from './gmail.ts'
-import { allowanceNow, CATCH_ALL_CAP, maySend, shouldHalt } from './rules.ts'
+import { allowanceNow, maySend, shouldHalt } from './rules.ts'
+import { tuning } from './settings.ts'
 import { suppressionIndex } from './suppression.ts'
 
 /** Rule 3: at most one send per mailbox per tick, so a backlog can never burst. */
@@ -62,12 +63,15 @@ export async function sendTick(now = new Date()): Promise<TickResult> {
   const boxes = await db.select().from(mailboxes).where(eq(mailboxes.active, true))
   if (boxes.length === 0) return result
 
+  // Read once per tick, not per mailbox: the rules must not change halfway
+  // through a pass or two mailboxes would be judged by different lines.
+  const rules = await tuning()
   const suppressed = await suppressionIndex()
 
   for (const mailbox of boxes) {
     const counts = await mailboxStats(mailbox.id, now)
 
-    if (shouldHalt(counts.sentEver, counts.bouncedEver)) {
+    if (shouldHalt(counts.sentEver, counts.bouncedEver, rules)) {
       // Halt only the campaigns that actually sent through this mailbox.
       await db
         .update(campaigns)
@@ -91,7 +95,10 @@ export async function sendTick(now = new Date()): Promise<TickResult> {
       continue
     }
 
-    const allowance = Math.min(allowanceNow(mailbox.dailyCap, counts.sentToday, minuteOfDay(now)), PER_TICK)
+    const allowance = Math.min(
+      allowanceNow(mailbox.dailyCap, counts.sentToday, minuteOfDay(now), rules),
+      PER_TICK,
+    )
     if (allowance <= 0) continue
 
     const queue = await db
@@ -103,6 +110,9 @@ export async function sendTick(now = new Date()): Promise<TickResult> {
         and(
           eq(messages.status, 'approved'),
           eq(campaigns.status, 'sending'),
+          // This sender is the email channel. A second channel gets its own
+          // adapter and its own filter rather than sharing this queue.
+          eq(campaigns.channel, 'email'),
           isNull(contacts.erasedAt),
         ),
       )
@@ -113,7 +123,7 @@ export async function sendTick(now = new Date()): Promise<TickResult> {
     for (const { message, contact } of queue) {
       if (sentHere >= allowance) break
       if (!contact.email || !maySend(contact.emailStatus, mailbox)) continue
-      if (contact.emailStatus === 'catch_all' && counts.catchAllToday >= CATCH_ALL_CAP) continue
+      if (contact.emailStatus === 'catch_all' && counts.catchAllToday >= rules.catchAllCap) continue
 
       if (suppressed(contact.email)) {
         await db

@@ -4,7 +4,7 @@ import { db } from '../db/index.ts'
 import { campaigns, contacts, messages, type Campaign, type Contact } from '../db/schema.ts'
 import { SENDABLE } from './contacts.ts'
 import { suppressionIndex } from './suppression.ts'
-import { unsubscribeUrl } from './token.ts'
+import { trackedUrl, unsubscribeUrl } from './token.ts'
 import { assembleBody, fill, SLOT, variables } from './template.ts'
 import { validate } from './validators.ts'
 
@@ -127,7 +127,14 @@ export async function generateForCampaign(campaignId: string, limit = 100): Prom
           }
 
           const flags = validate(outcome.text, contact)
-          const rendered = fill(campaign.bodyTemplate, { ...values, [SLOT]: outcome.text })
+          // {{link}} is the way into the funnel: a tracked hop that records the
+          // click and lands them on the enquiry form. Optional — a campaign
+          // that never uses it simply has no link to click.
+          const rendered = fill(campaign.bodyTemplate, {
+            ...values,
+            [SLOT]: outcome.text,
+            link: trackedUrl({ contactId: contact.id, campaignId }),
+          })
           return {
             campaignId,
             contactId: contact.id,

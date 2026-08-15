@@ -13,20 +13,30 @@ import {
   sentMessages,
 } from '@/lib/campaigns'
 import { contactStats, getContact, listContacts } from '@/lib/contacts'
+import { enquiryCount, listEnquiries } from '@/lib/funnel'
+import { byLetter, byMailbox, bySource, listHealth } from '@/lib/reports'
+import { asClock, tuning } from '@/lib/settings'
+import { canPull, listSources, PUSH_PRESETS, pushUrl, readiness } from '@/lib/sources'
+import { LIMITS } from '@/lib/rules'
 import { isConfigured } from '@/lib/gmail'
 import { frankingCode, nextAction, shouldHalt, type Next } from '@/lib/rules'
 import { mailboxStats } from '@/lib/send'
 import { SLOT } from '@/lib/template'
 import {
+  addSource,
   approve,
   approveAllClean,
   blockDomain,
+  enrichContacts,
   erase,
   generateAction,
   newCampaign,
   pauseSending,
   reject,
+  removeSource,
+  runSourceAction,
   saveCampaignAction,
+  saveSettings,
   saveStatus,
   startSending,
   suppressEmail,
@@ -73,7 +83,9 @@ import {
  * panel, `?page=`/`?q=` walk a list.
  */
 
-const BOOK_VIEWS = new Set(['book', 'boxes', 'returned', 'sent'])
+const BOOK_VIEWS = new Set([
+  'book', 'boxes', 'returned', 'sent', 'replies', 'sources', 'reports', 'settings',
+])
 
 /** The four things you do to a letter, in the order you do them. */
 const STEPS = ['Write', 'Who', 'Review', 'Send'] as const
@@ -94,17 +106,30 @@ const num = (v: string | string[] | undefined, fallback = 1) => {
   const n = Number(one(v))
   return Number.isInteger(n) && n > 0 ? n : fallback
 }
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * An id from the URL, or nothing.
+ *
+ * These columns are `uuid`, so Postgres throws on anything that is not one —
+ * a stale bookmark or a typo in the address bar was a 500. Guarding here rather
+ * than at each query is the whole fix: there are exactly two ids in the URL and
+ * both come through this function, so no later caller can reintroduce it.
+ */
+const id = (v: string | string[] | undefined) => (UUID.test(one(v)) ? one(v) : '')
 type Params = Record<string, string | string[] | undefined>
 
 export default async function Desk({ searchParams }: PageProps<'/'>) {
   const sp = await searchParams
   const view = one(sp.view)
-  const openId = one(sp.c)
+  const openId = id(sp.c)
 
-  const [rows, contacts, boxRows] = await Promise.all([
+  const [rows, contacts, boxRows, replies] = await Promise.all([
     listCampaigns(),
     contactStats(),
     db.select().from(mailboxes).orderBy(mailboxes.email),
+    enquiryCount(),
   ])
 
   // ponytail: one count per letter. A handful of cheap counts beats deriving
@@ -198,6 +223,9 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
               ['/?as=list', 'Letters', rows.length, listed],
               ['/?view=book', 'Contacts', contacts.total, view === 'book'],
               ['/?view=sent', 'Sent', gone, view === 'sent'],
+              ['/?view=replies', 'Replies', replies, view === 'replies'],
+              ['/?view=sources', 'Sources', null, view === 'sources'],
+              ['/?view=reports', 'Reports', null, view === 'reports'],
               ['/?view=returned', 'Blocked', null, view === 'returned'],
             ] as const
           ).map(([href, label, n, on]) => (
@@ -219,13 +247,17 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
           <Link href="/?view=boxes" className="text-dim transition-colors hover:text-ink">
             <Postage boxes={boxes} />
           </Link>
-          <span className="flex items-center gap-2 text-dim">
+          <Link
+            href="/?view=settings"
+            aria-current={view === 'settings' ? 'page' : undefined}
+            className="flex items-center gap-2 text-dim transition-colors hover:text-ink"
+          >
             <span
               className={`size-1.5 rounded-full ${isConfigured() ? 'bg-primary' : 'bg-dim'}`}
               aria-hidden
             />
             {isConfigured() ? 'Gmail live' : 'Dry run'}
-          </span>
+          </Link>
         </span>
 
         {halted.length > 0 && (
@@ -288,6 +320,14 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
                   <BookSheet sp={sp} />
                 ) : view === 'sent' ? (
                   <SentSheet q={one(sp.q).trim()} page={num(sp.page)} />
+                ) : view === 'replies' ? (
+                  <RepliesSheet page={num(sp.page)} />
+                ) : view === 'sources' ? (
+                  <SourcesSheet />
+                ) : view === 'reports' ? (
+                  <ReportsSheet />
+                ) : view === 'settings' ? (
+                  <SettingsSheet saved={one(sp.saved) === '1'} />
                 ) : view === 'boxes' ? (
                   <BoxesSheet boxes={boxes} />
                 ) : (
@@ -525,32 +565,24 @@ async function LetterSheet({
         )}
 
         {clause === 2 && (
-          <div className="flex h-full flex-col justify-center gap-5 text-center">
-            <div>
+          <div className="flex h-full flex-col gap-5">
+            <div className="flex items-baseline gap-4">
               <p className="text-display font-medium leading-none tracking-[-0.03em]">{audience}</p>
-              <p className="mt-2 text-dim">
-                {audience === 1 ? 'address' : 'addresses'} not yet written to
+              <p className="min-w-0 flex-1 text-dim">
+                {audience === 1 ? 'address' : 'addresses'} on the list this letter has not been
+                written to yet. Sources below feed that list.
               </p>
+              {audience > 0 && (
+                <form action={generateAction}>
+                  <input type="hidden" name="id" value={campaign.id} />
+                  <button className={go} disabled={!hasSlot}>
+                    Draft the next {Math.min(audience, 25)}
+                  </button>
+                </form>
+              )}
             </div>
-            {audience === 0 ? (
-              <p className="mx-auto max-w-sm text-dim">
-                Nobody is eligible. An address must be verified or catch-all — set that in the{' '}
-                <Link href="/?view=book" className="underline underline-offset-4">
-                  address book
-                </Link>{' '}
-                or map it on import.
-              </p>
-            ) : (
-              <form action={generateAction} className="mx-auto max-w-sm">
-                <input type="hidden" name="id" value={campaign.id} />
-                <button className={go} disabled={!hasSlot}>
-                  Draft the next {Math.min(audience, 25)}
-                </button>
-                <p className="mt-2.5 text-dim">
-                  One short generation each, then both readers check it. About half a minute.
-                </p>
-              </form>
-            )}
+
+            <Sources campaignId={campaign.id} />
           </div>
         )}
 
@@ -762,6 +794,7 @@ const bookHref = (sp: Params, patch: Record<string, string | undefined>) => {
 }
 
 async function BookSheet({ sp }: { sp: Params }) {
+  const said = one(sp.said)
   const q = one(sp.q).trim()
   const status = one(sp.status)
   const consent = one(sp.consent)
@@ -775,6 +808,11 @@ async function BookSheet({ sp }: { sp: Params }) {
       note={`${list.total.toLocaleString()} ${filtered ? 'matching' : 'on the list'}`}
       actions={
         <>
+          <form action={enrichContacts}>
+            <button className={quiet} title="Ask Apollo what it knows about unverified addresses">
+              Enrich unverified
+            </button>
+          </form>
           <a
             href={`/api/export?${new URLSearchParams({ ...(q && { q }), ...(status && { status }), ...(consent && { consent }) })}`}
             className={quiet}
@@ -790,6 +828,10 @@ async function BookSheet({ sp }: { sp: Params }) {
         </>
       }
     >
+      {said && (
+        <p className="shrink-0 border-b border-line bg-raise px-6 py-3">{said}</p>
+      )}
+
       <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-line px-6 py-3">
         <Search />
         <Filter name="status" label="Any address status" options={emailStatus.enumValues} />
@@ -856,7 +898,7 @@ const fmt = (d: Date) =>
   d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
 
 async function BookDrawers({ sp }: { sp: Params }) {
-  const openId = one(sp.contact)
+  const openId = id(sp.contact)
   const panel = one(sp.panel)
   const selected = openId ? await getContact(openId) : undefined
   const closed = bookHref(sp, { contact: undefined, panel: undefined })
@@ -1028,6 +1070,480 @@ async function SentSheet({ q, page }: { q: string; page: number }) {
       )}
 
       {log.pages > 1 && <Pager page={log.page} pages={log.pages} href={href} />}
+    </Sheet>
+  )
+}
+
+/* ── reports ──────────────────────────────────────────────────────────────── */
+
+const asPercent = (n: number) => `${(n * 100).toFixed(1)}%`
+
+/** A bar that reads as a bar at a glance, without a chart library. */
+function Bar({ value, danger }: { value: number; danger?: boolean }) {
+  return (
+    <span className="inline-flex h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-raise" aria-hidden>
+      <span
+        className={danger ? 'bg-primary' : 'bg-ink/50'}
+        style={{ width: `${Math.min(Math.max(value, 0), 1) * 100}%` }}
+      />
+    </span>
+  )
+}
+
+/**
+ * Three questions, three tables.
+ *
+ * Which source is worth paying for, whether it is safe to send today, and
+ * whether the writing lands. Nothing here is a stored counter — every number
+ * is an aggregate over the rows that caused it, so a report can never drift
+ * out of step with what actually happened.
+ */
+async function ReportsSheet() {
+  const rules = await tuning()
+  const [sources, boxes, letters, health] = await Promise.all([
+    bySource(),
+    byMailbox(rules),
+    byLetter(),
+    listHealth(),
+  ])
+
+  const row = 'flex items-center gap-3 border-b border-line px-6 py-2 last:border-b-0'
+  const head = 'flex items-center gap-3 bg-raise px-6 py-2 text-micro uppercase tracking-[0.14em] text-dim'
+
+  return (
+    <Sheet
+      label="Reports"
+      title="What is actually happening"
+      note="Every number is counted from the rows that caused it, not from a tally kept alongside."
+    >
+      <div className="quiet-scroll min-h-0 flex-1">
+        {/* ── is it safe to send today ──────────────────────────────────── */}
+        <section>
+          <div className="flex items-baseline gap-3 px-6 pt-6">
+            <Label>Mailboxes</Label>
+            <span className="text-dim">
+              halting above {(rules.bounceThreshold / 100).toFixed(1)}% once {rules.bounceMinimum} have
+              been attempted
+            </span>
+            <Link href="/?view=settings" className="ml-auto text-dim underline-offset-4 hover:text-ink hover:underline">
+              tune
+            </Link>
+          </div>
+          <div className="mt-3">
+            <div className={head}>
+              <span className="min-w-0 flex-1">mailbox</span>
+              <span className="w-20 text-right">today</span>
+              <span className="w-20 text-right">sent</span>
+              <span className="w-24 text-right">bounced</span>
+              <span className="w-16" />
+            </div>
+            {boxes.map((box) => (
+              <div key={box.email} className={row}>
+                <span className="min-w-0 flex-1 truncate">{box.email}</span>
+                <span className="w-20 text-right tabular-nums text-dim">
+                  {box.sentToday}/{box.cap}
+                </span>
+                <span className="w-20 text-right tabular-nums">{box.sentEver}</span>
+                <span className={`w-24 text-right tabular-nums ${box.towardHalt > 0.7 ? 'text-primary' : 'text-dim'}`}>
+                  {box.bounced > 0 ? asPercent(box.bounceRate) : '—'}
+                </span>
+                <span className="flex w-16 justify-end">
+                  {box.halted ? <Stamp tone="halted">halted</Stamp> : <Bar value={box.towardHalt} danger={box.towardHalt > 0.7} />}
+                </span>
+              </div>
+            ))}
+            {boxes.length === 0 && <p className="px-6 py-3 text-dim">No mailboxes yet.</p>}
+          </div>
+        </section>
+
+        {/* ── which source is worth paying for ──────────────────────────── */}
+        <section className="mt-6">
+          <div className="flex items-baseline gap-3 px-6">
+            <Label>Sources</Label>
+            <span className="text-dim">where the contacts came from, and what they turned into</span>
+          </div>
+          <div className="mt-3">
+            <div className={head}>
+              <span className="min-w-0 flex-1">source</span>
+              <span className="w-20 text-right">contacts</span>
+              <span className="w-20 text-right">sendable</span>
+              <span className="w-16 text-right">sent</span>
+              <span className="w-16 text-right">clicks</span>
+              <span className="w-24 text-right">enquiries</span>
+            </div>
+            {sources.map((source) => (
+              <div key={source.source} className={row}>
+                <span className="min-w-0 flex-1 truncate">{source.source}</span>
+                <span className="w-20 text-right tabular-nums">{source.contacts}</span>
+                <span className="w-20 text-right tabular-nums text-dim">
+                  {source.sendable}
+                  <span className="ml-1 opacity-60">{asPercent(source.sendable / Math.max(source.contacts, 1))}</span>
+                </span>
+                <span className="w-16 text-right tabular-nums">{source.sent}</span>
+                <span className="w-16 text-right tabular-nums text-dim">{source.clicked}</span>
+                <span className="w-24 text-right tabular-nums">
+                  {source.enquired > 0 ? (
+                    <span className="text-primary">
+                      {source.enquired}
+                      <span className="ml-1 opacity-70">{source.yieldPerThousand.toFixed(1)}/k</span>
+                    </span>
+                  ) : (
+                    <span className="text-dim">—</span>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* ── is the writing landing ────────────────────────────────────── */}
+        <section className="mt-6">
+          <div className="flex items-baseline gap-3 px-6">
+            <Label>Letters</Label>
+            <span className="text-dim">a high flag rate means the prompt is inventing things</span>
+          </div>
+          <div className="mt-3">
+            <div className={head}>
+              <span className="min-w-0 flex-1">letter</span>
+              <span className="w-24 text-right">flagged</span>
+              <span className="w-16 text-right">sent</span>
+              <span className="w-16 text-right">clicks</span>
+              <span className="w-20 text-right">replies</span>
+            </div>
+            {letters.map((letter) => (
+              <div key={letter.id} className={row}>
+                <Link href={`/?c=${letter.id}`} className="min-w-0 flex-1 truncate hover:underline">
+                  {letter.name}
+                </Link>
+                <span className={`w-24 text-right tabular-nums ${letter.flagRate > 0.3 ? 'text-primary' : 'text-dim'}`}>
+                  {letter.written > 0 ? asPercent(letter.flagRate) : '—'}
+                </span>
+                <span className="w-16 text-right tabular-nums">{letter.sent}</span>
+                <span className="w-16 text-right tabular-nums text-dim">{letter.clicked}</span>
+                <span className="w-20 text-right tabular-nums">
+                  {letter.replied > 0 ? (
+                    <span className="text-primary">{asPercent(letter.replyRate)}</span>
+                  ) : (
+                    <span className="text-dim">—</span>
+                  )}
+                </span>
+              </div>
+            ))}
+            {letters.length === 0 && <p className="px-6 py-3 text-dim">No letters yet.</p>}
+          </div>
+        </section>
+
+        {/* ── how fast the list is being burned ─────────────────────────── */}
+        <section className="mt-6 px-6 pb-6">
+          <Label>The list</Label>
+          <p className="mt-2 text-dim">
+            <strong className="font-medium text-ink">{health.total.toLocaleString()}</strong> can never
+            be written to — {health.last7} added this week, {health.last30} this month.
+            {health.unsubscribed > 0 && ` ${health.unsubscribed} asked to stop.`}
+            {health.bounced > 0 && ` ${health.bounced} came back undeliverable.`}
+          </p>
+        </section>
+      </div>
+    </Sheet>
+  )
+}
+
+/* ── settings ─────────────────────────────────────────────────────────────── */
+
+/**
+ * The rules, as controls.
+ *
+ * Every one of these was a constant. They are bounded on save — the bounds are
+ * in lib/rules.ts beside the rules themselves and stated here, because a limit
+ * you discover by hitting it is a bad limit.
+ */
+async function SettingsSheet({ saved }: { saved: boolean }) {
+  const rules = await tuning()
+  const label = 'flex flex-col gap-2'
+
+  return (
+    <Sheet
+      label="Settings"
+      title="How hard to push"
+      note="Tighten these while a domain is warming. They are bounded — tuning the rules is the point, turning them off is not."
+    >
+      {saved && <p className="shrink-0 border-b border-line bg-raise px-6 py-3">Saved.</p>}
+
+      <form action={saveSettings} className="quiet-scroll min-h-0 flex-1 p-6">
+        <div className="grid max-w-2xl gap-5 sm:grid-cols-2">
+          <label className={label}>
+            <Label>Send between</Label>
+            <span className="flex items-center gap-2">
+              <input type="time" name="window_start" defaultValue={asClock(rules.windowStart)} className={field} />
+              <span className="text-dim">and</span>
+              <input type="time" name="window_end" defaultValue={asClock(rules.windowEnd)} className={field} />
+            </span>
+            <span className="text-dim">
+              The daily cap is released evenly across this. {asClock(LIMITS.windowStart[0])}–
+              {asClock(LIMITS.windowEnd[1])} at the widest.
+            </span>
+          </label>
+
+          <label className={label}>
+            <Label>Stop a mailbox above</Label>
+            <span className="flex items-center gap-2">
+              <input
+                name="bounce_threshold"
+                type="number"
+                step="0.1"
+                min={LIMITS.bounceThreshold[0] / 100}
+                max={LIMITS.bounceThreshold[1] / 100}
+                defaultValue={(rules.bounceThreshold / 100).toFixed(1)}
+                className={field}
+              />
+              <span className="text-dim">% bounces</span>
+            </span>
+            <span className="text-dim">
+              Between {LIMITS.bounceThreshold[0] / 100}% and {LIMITS.bounceThreshold[1] / 100}%. Above
+              that the domain is already in trouble.
+            </span>
+          </label>
+
+          <label className={label}>
+            <Label>Only after</Label>
+            <input
+              name="bounce_minimum"
+              type="number"
+              min={LIMITS.bounceMinimum[0]}
+              max={LIMITS.bounceMinimum[1]}
+              defaultValue={rules.bounceMinimum}
+              className={field}
+            />
+            <span className="text-dim">
+              attempts. Below {LIMITS.bounceMinimum[0]} a bounce rate is noise, so one bad address
+              would stop everything.
+            </span>
+          </label>
+
+          <label className={label}>
+            <Label>Catch-all addresses a day</Label>
+            <input
+              name="catch_all_cap"
+              type="number"
+              min={LIMITS.catchAllCap[0]}
+              max={LIMITS.catchAllCap[1]}
+              defaultValue={rules.catchAllCap}
+              className={field}
+            />
+            <span className="text-dim">
+              Per mailbox, and only from one flagged for them. Zero switches catch-all sending off.
+            </span>
+          </label>
+
+          <label className={label}>
+            <Label>Drafts per batch</Label>
+            <input
+              name="draft_batch"
+              type="number"
+              min={LIMITS.draftBatch[0]}
+              max={LIMITS.draftBatch[1]}
+              defaultValue={rules.draftBatch}
+              className={field}
+            />
+            <span className="text-dim">Each draft is one model call, so this is what a run costs.</span>
+          </label>
+        </div>
+
+        <div className="mt-6 flex items-center gap-3">
+          <button className={go}>Save</button>
+          <span className="text-dim">Takes effect on the next send tick.</span>
+        </div>
+      </form>
+    </Sheet>
+  )
+}
+
+/* ── sources ──────────────────────────────────────────────────────────────── */
+
+/**
+ * Where a letter's audience comes from.
+ *
+ * Two shapes, and the difference is visible rather than explained: a pull
+ * source has a Pull button, a push source has a URL you paste into the tool
+ * that will post to it. Whatever the last run said is shown verbatim — an
+ * Apollo plan that refuses People Search says so here, instead of looking like
+ * a search that found nobody.
+ */
+async function Sources({ campaignId }: { campaignId?: string }) {
+  const sources = await listSources(campaignId)
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <div className="flex items-baseline gap-3">
+        <Label>Sources</Label>
+        <span className="text-dim">
+          {sources.length === 0 ? 'none yet' : `${sources.length} feeding this list`}
+        </span>
+      </div>
+
+      {sources.length > 0 && (
+        <div className="overflow-hidden rounded-[5px] border border-line">
+          {sources.map((source) => {
+            const ready = readiness(source.kind)
+            return (
+              <div
+                key={source.id}
+                className="flex flex-wrap items-center gap-3 border-b border-line px-3 py-2 last:border-b-0"
+              >
+                <span className="text-primary">
+                  <Franking code={frankingCode(source.id)} className="h-2 w-7" />
+                </span>
+                <span className="shrink-0 font-medium">{source.name}</span>
+                <Stamp tone={source.kind === 'apollo' ? 'sending' : 'none'}>{source.kind}</Stamp>
+
+                {canPull(source.kind) ? (
+                  <span className="min-w-0 flex-1 truncate text-dim">
+                    {source.lastResult ?? 'never pulled'}
+                  </span>
+                ) : (
+                  <code className="min-w-0 flex-1 truncate text-small text-dim">
+                    POST {pushUrl(source.config.preset ?? 'evaboot')}
+                  </code>
+                )}
+
+                {canPull(source.kind) &&
+                  (ready.ok ? (
+                    <form action={runSourceAction}>
+                      <input type="hidden" name="id" value={source.id} />
+                      <button className={quiet}>Pull</button>
+                    </form>
+                  ) : (
+                    <span className="shrink-0 text-primary">{ready.why}</span>
+                  ))}
+
+                <form action={removeSource}>
+                  <input type="hidden" name="id" value={source.id} />
+                  <button className="px-2 text-dim transition-colors hover:text-primary" aria-label={`Remove ${source.name}`}>
+                    ✕
+                  </button>
+                </form>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      <details className="rounded-[5px] border border-line">
+        <summary className="cursor-pointer px-3 py-2 text-dim transition-colors hover:text-ink">
+          Add a source
+        </summary>
+        <div className="grid gap-5 border-t border-line p-6 sm:grid-cols-2">
+          <form action={addSource} className="flex flex-col gap-3">
+            <input type="hidden" name="kind" value="apollo" />
+            {campaignId && <input type="hidden" name="campaign" value={campaignId} />}
+            <Label>Apollo — we ask them</Label>
+            <input name="name" placeholder="Name it" className={ruled} required />
+            <input name="titles" placeholder="Titles, comma separated" className={ruled} />
+            <input name="locations" placeholder="Locations" className={ruled} />
+            <input name="domains" placeholder="Company domains" className={ruled} />
+            <button className={quiet}>Add Apollo source</button>
+            <p className="text-dim">
+              Enrichment works on the free plan. People Search needs a paid one, and a pull will
+              say so rather than come back empty.
+            </p>
+          </form>
+
+          <form action={addSource} className="flex flex-col gap-3">
+            <input type="hidden" name="kind" value="linkedin" />
+            {campaignId && <input type="hidden" name="campaign" value={campaignId} />}
+            <Label>LinkedIn — they post to us</Label>
+            <input name="name" placeholder="Name it" className={ruled} required />
+            <select name="preset" className={ruled} defaultValue="evaboot">
+              {PUSH_PRESETS.map((preset) => (
+                <option key={preset.key} value={preset.key}>
+                  {preset.label}
+                </option>
+              ))}
+            </select>
+            <button className={quiet}>Add LinkedIn source</button>
+            <p className="text-dim">
+              Sales Navigator has no export API. Point your exporter&rsquo;s webhook at the URL this
+              gives you — nothing here automates a browser against LinkedIn.
+            </p>
+          </form>
+        </div>
+      </details>
+    </div>
+  )
+}
+
+function SourcesSheet() {
+  return (
+    <Sheet
+      label="Sources"
+      title="Where contacts come from"
+      note="These feed the address book itself. A source added inside a letter feeds only that letter."
+    >
+      <div className="min-h-0 flex-1 overflow-hidden p-6">
+        <Sources />
+      </div>
+    </Sheet>
+  )
+}
+
+/* ── what came back ───────────────────────────────────────────────────────── */
+
+/**
+ * The far end of the funnel.
+ *
+ * Everything else on this desk measures effort — written, approved, sent. This
+ * measures the only outcome that matters, and ties each one back to the letter
+ * that caused it when there was one.
+ */
+async function RepliesSheet({ page }: { page: number }) {
+  const log = await listEnquiries({ page, size: ROWS })
+
+  return (
+    <Sheet
+      label="Replies"
+      title="Who wrote back"
+      note={`${log.total.toLocaleString()} ${log.total === 1 ? 'enquiry' : 'enquiries'} through the website, newest first.`}
+    >
+      {log.rows.length === 0 ? (
+        <Empty
+          title="Nobody yet"
+          note={
+            <>
+              Put <code>{'{{link}}'}</code> in a letter&rsquo;s body. It becomes a tracked link
+              that records the click and lands them on the enquiry form.
+            </>
+          }
+        />
+      ) : (
+        <Ledger>
+          {log.rows.map(({ enquiry, campaign }) => (
+            <div key={enquiry.id} className="flex items-baseline gap-3 border-b border-line px-6 py-3">
+              <span className="w-28 shrink-0 text-small tabular-nums text-dim">
+                {when(enquiry.createdAt)}
+              </span>
+              <span className="w-44 shrink-0 truncate font-medium">
+                {enquiry.name || enquiry.email}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-dim">{enquiry.body || '—'}</span>
+              {campaign ? (
+                <Link
+                  href={`/?c=${campaign.id}`}
+                  className="w-36 shrink-0 truncate text-dim underline-offset-4 hover:text-ink hover:underline"
+                >
+                  {campaign.name}
+                </Link>
+              ) : (
+                <span className="w-36 shrink-0 text-right">
+                  <Stamp tone="none">came in cold</Stamp>
+                </span>
+              )}
+            </div>
+          ))}
+        </Ledger>
+      )}
+      {log.pages > 1 && (
+        <Pager page={log.page} pages={log.pages} href={(n) => `/?view=replies&page=${n}`} />
+      )}
     </Sheet>
   )
 }

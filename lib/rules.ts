@@ -2,7 +2,13 @@
 // can be read and tested on their own. lib/send.ts is the only caller.
 import type { Contact, Mailbox } from '../db/schema.ts'
 
-/** Business hours, local time, in minutes past midnight. */
+/**
+ * The defaults, which are also the safe values.
+ *
+ * These used to be the only values. They are now what a fresh install starts
+ * with and what every one of these functions falls back to when called without
+ * settings — which is why the whole test suite still passes unchanged.
+ */
 export const WINDOW = { start: 9 * 60, end: 17 * 60 }
 
 /** Rule 2: catch-all addresses are capped well below the normal daily cap. */
@@ -13,16 +19,73 @@ const BOUNCE_THRESHOLD = 0.03
 // sample where a single bounce doesn't trip the halt; raise it as volume grows.
 const BOUNCE_MINIMUM = 20
 
+/** What the sender needs to know. Every field optional; defaults are above. */
+export type Tuning = {
+  windowStart?: number
+  windowEnd?: number
+  /** Basis points. 300 = 3.00%. */
+  bounceThreshold?: number
+  bounceMinimum?: number
+  catchAllCap?: number
+  draftBatch?: number
+}
+
+/**
+ * The bounds, and why each one exists.
+ *
+ * Tuning the rules is the point; being able to turn them off is not. A 50%
+ * bounce threshold is not a setting, it is a way to lose the domain — so the
+ * clamps are part of the rules rather than validation bolted on at the edge.
+ */
+export const LIMITS = {
+  // Nothing outside 06:00–22:00: mail landing at 3am reads as a machine.
+  windowStart: [6 * 60, 21 * 60],
+  windowEnd: [7 * 60, 22 * 60],
+  // Below 1% a single bad list halts everything; above 8% the domain is
+  // already in trouble by the time anything stops.
+  bounceThreshold: [100, 800],
+  // Under 10 attempts a rate is noise.
+  bounceMinimum: [10, 500],
+  catchAllCap: [0, 50],
+  draftBatch: [1, 100],
+} as const
+
+/** Clamped and whole. Anything unparseable falls back to the safe default. */
+export function clampTuning(input: Record<string, unknown>, base: Required<Tuning>): Required<Tuning> {
+  const out = { ...base }
+  for (const key of Object.keys(LIMITS) as (keyof typeof LIMITS)[]) {
+    const given = input[key]
+    // Number(null) is 0 and Number('') is 0 — both would clamp to the lowest
+    // bound and look deliberate. A missing value must keep the safe default,
+    // not silently become the most restrictive one.
+    if (given === null || given === undefined || given === '') continue
+    const raw = Number(given)
+    if (!Number.isFinite(raw)) continue
+    const [low, high] = LIMITS[key]
+    out[key] = Math.min(Math.max(Math.round(raw), low), high)
+  }
+  // A window that ends before it starts would silently send nothing all day.
+  if (out.windowEnd <= out.windowStart) out.windowEnd = Math.min(out.windowStart + 60, LIMITS.windowEnd[1])
+  return out
+}
+
 /**
  * Rule 3. How many sends this mailbox is still owed at this moment — the daily
  * cap released evenly across the sending window rather than all at once.
  * Outside the window it is zero, so a worker that was down all morning cannot
  * catch up in one burst at five o'clock.
  */
-export function allowanceNow(cap: number, sentToday: number, minuteOfDay: number) {
-  if (minuteOfDay < WINDOW.start || minuteOfDay >= WINDOW.end) return 0
-  const span = WINDOW.end - WINDOW.start
-  const unlocked = Math.floor((cap * (minuteOfDay - WINDOW.start)) / span)
+export function allowanceNow(
+  cap: number,
+  sentToday: number,
+  minuteOfDay: number,
+  tuning: Tuning = {},
+) {
+  const start = tuning.windowStart ?? WINDOW.start
+  const end = tuning.windowEnd ?? WINDOW.end
+  if (minuteOfDay < start || minuteOfDay >= end) return 0
+  const span = end - start
+  const unlocked = Math.floor((cap * (minuteOfDay - start)) / span)
   return Math.max(0, Math.min(unlocked, cap) - sentToday)
 }
 
@@ -101,7 +164,9 @@ export function nextAction(
 }
 
 /** Rule 2: a mailbox bouncing above 3% halts its campaigns automatically. */
-export function shouldHalt(sent: number, bounced: number) {
+export function shouldHalt(sent: number, bounced: number, tuning: Tuning = {}) {
+  const threshold = (tuning.bounceThreshold ?? BOUNCE_THRESHOLD * 10_000) / 10_000
+  const minimum = tuning.bounceMinimum ?? BOUNCE_MINIMUM
   const total = sent + bounced
-  return total >= BOUNCE_MINIMUM && bounced / total > BOUNCE_THRESHOLD
+  return total >= minimum && bounced / total > threshold
 }

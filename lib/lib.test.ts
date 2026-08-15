@@ -4,7 +4,7 @@ import { test } from 'node:test'
 
 process.env.UNSUBSCRIBE_SECRET = 'test-secret'
 
-const { makeToken, readToken } = await import('./token.ts')
+const { makeToken, readToken, makeLink, readLink } = await import('./token.ts')
 const { mapRow } = await import('./csv.ts')
 const { assembleBody, fill, missing, variables } = await import('./template.ts')
 const { validate, claims, ungrounded } = await import('./validators.ts')
@@ -202,6 +202,119 @@ test('a typed batch size can never run away with the model budget', () => {
   assert.equal(batchSize('40.5'), 25, 'half a draft is not a batch')
   assert.equal(batchSize('40'), 40)
   assert.equal(batchSize('500'), 100, 'the ceiling holds however big the ask')
+})
+
+/* the rules, once they are tunable ---------------------------------------- */
+
+const { clampTuning, LIMITS } = await import('./rules.ts')
+
+const SAFE = {
+  windowStart: 9 * 60,
+  windowEnd: 17 * 60,
+  bounceThreshold: 300,
+  bounceMinimum: 20,
+  catchAllCap: 10,
+  draftBatch: 25,
+}
+
+test('a tuned window moves the whole ramp with it', () => {
+  const evening = { windowStart: 12 * 60, windowEnd: 20 * 60 }
+  // 09:00 is inside the default window but outside this one.
+  assert.equal(allowanceNow(35, 0, 9 * 60, evening), 0, 'before the tuned window')
+  assert.equal(allowanceNow(35, 0, 16 * 60, evening), 17, 'half way through the tuned window')
+  // The same minute means something different under each window, which is the
+  // entire point of making it a setting.
+  assert.notEqual(allowanceNow(35, 0, 10 * 60), allowanceNow(35, 0, 10 * 60, evening))
+})
+
+test('a tuned bounce threshold moves the halt line', () => {
+  // 4 in 100 is 4%: over the default 3%, under a tuned 5%.
+  assert.equal(shouldHalt(96, 4), true, 'the default line')
+  assert.equal(shouldHalt(96, 4, { bounceThreshold: 500 }), false, 'a looser line')
+  assert.equal(shouldHalt(96, 4, { bounceThreshold: 100 }), true, 'a tighter line')
+  // And the sample minimum still guards a tiny run at any threshold.
+  assert.equal(shouldHalt(2, 1, { bounceThreshold: 100 }), false, 'still too few to judge')
+  assert.equal(shouldHalt(2, 1, { bounceThreshold: 100, bounceMinimum: 3 }), true)
+})
+
+test('tuning is clamped, so no setting can burn the domain', () => {
+  // The dangerous direction: a threshold so loose nothing ever halts.
+  assert.equal(clampTuning({ bounceThreshold: 5000 }, SAFE).bounceThreshold, LIMITS.bounceThreshold[1])
+  assert.equal(clampTuning({ bounceThreshold: 0 }, SAFE).bounceThreshold, LIMITS.bounceThreshold[0])
+  // 3am sending reads as a machine.
+  assert.equal(clampTuning({ windowStart: 0 }, SAFE).windowStart, LIMITS.windowStart[0])
+  assert.equal(clampTuning({ windowEnd: 23 * 60 }, SAFE).windowEnd, LIMITS.windowEnd[1])
+
+  // A window that ends before it begins would silently send nothing all day —
+  // the worst failure here, because it looks like the app is simply broken.
+  const inverted = clampTuning({ windowStart: 15 * 60, windowEnd: 9 * 60 }, SAFE)
+  assert.ok(inverted.windowEnd > inverted.windowStart, 'never inverted')
+
+  // Junk leaves the safe value in place rather than becoming NaN.
+  assert.deepEqual(clampTuning({ bounceThreshold: 'abc', catchAllCap: null }, SAFE), SAFE)
+  assert.deepEqual(clampTuning({}, SAFE), SAFE)
+})
+
+/* the column presets ------------------------------------------------------- */
+
+const { PRESETS } = await import('./connectors.ts')
+
+test('every exporter preset can actually produce an importable row', () => {
+  // A preset with a typo'd header makes every row malformed: the import reports
+  // "0 new" and nothing on screen says why. Nothing else catches that — the
+  // types are all `string`, and a mapping to a column that does not exist is
+  // indistinguishable from one that does until rows arrive.
+  for (const [name, preset] of Object.entries(PRESETS)) {
+    assert.ok(
+      preset.mapping.email || preset.mapping.linkedin_url,
+      `${name} maps neither email nor linkedin_url, so runImport would reject every row`,
+    )
+  }
+})
+
+test('a row in each exporter\'s own column names survives mapping', () => {
+  // One realistic row per tool, spelled the way that tool actually spells it.
+  const samples: Record<string, Record<string, string>> = {
+    evaboot: { 'First Name': 'Ada', 'Last Name': 'Lovelace', Email: 'ada@a.example', Company: 'Engines', Title: 'CTO', 'Email Status': 'verified' },
+    phantombuster: { firstName: 'Ada', lastName: 'Lovelace', email: 'ada@b.example', companyName: 'Engines', title: 'CTO' },
+    clay: { 'First Name': 'Ada', 'Last Name': 'Lovelace', 'Work Email': 'ada@c.example', 'Company Name': 'Engines', 'Job Title': 'CTO' },
+    apollo_csv: { 'First Name': 'Ada', 'Last Name': 'Lovelace', Email: 'ada@d.example', Company: 'Engines', Title: 'CTO', 'Email Status': 'verified' },
+  }
+
+  for (const [name, row] of Object.entries(samples)) {
+    const result = mapRow(row, PRESETS[name].mapping)
+    assert.ok(!('error' in result), `${name}: ${'error' in result ? result.error : ''}`)
+    assert.equal(result.contact.firstName, 'Ada', `${name} lost the first name`)
+    assert.equal(result.contact.company, 'Engines', `${name} lost the company`)
+    assert.ok(result.contact.email?.endsWith('.example'), `${name} lost the address`)
+  }
+
+  // And the status column really is read, not just carried along.
+  const verified = mapRow(samples.evaboot, PRESETS.evaboot.mapping)
+  assert.equal('error' in verified ? null : verified.contact.emailStatus, 'verified')
+})
+
+/* tracked links ----------------------------------------------------------- */
+
+test('a tracked link carries who it was for, and survives a round trip', () => {
+  const trace = { contactId: 'c1e7f8a2-0000-4000-8000-000000000001', campaignId: 'aa11bb22-0000-4000-8000-000000000002' }
+  assert.deepEqual(readLink(makeLink(trace)), trace)
+})
+
+test('a forged or swapped tracked link is refused, not misread', () => {
+  const trace = { contactId: 'c1', campaignId: 'k1' }
+  const token = makeLink(trace)
+  const [body, sig] = token.split('.')
+
+  assert.equal(readLink(`${body}.${'a'.repeat(sig.length)}`), null, 'bad signature')
+  assert.equal(readLink(body), null, 'no signature at all')
+  assert.equal(readLink(''), null, 'empty')
+
+  // An unsubscribe token must never be usable as a tracked link, or a click
+  // would attribute to whatever the address happened to parse into.
+  assert.equal(readLink(makeToken('ada@example.com')), null, 'wrong payload kind')
+  // And the reverse: a link token is not an address.
+  assert.equal(readToken(token), null, 'a link is not an unsubscribe token')
 })
 
 /* telling one letter from another ----------------------------------------- */

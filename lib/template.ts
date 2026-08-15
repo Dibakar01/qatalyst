@@ -5,7 +5,12 @@ export const SLOT = 'personalised'
 
 const TOKEN = /\{\{\s*([^{}]+?)\s*\}\}/g
 
-/** Values a template may reference: the mapped fields plus anything in context. */
+/**
+ * Values a template may reference: the mapped fields plus anything in context.
+ *
+ * `{{link}}` and `{{personalised}}` are supplied by the generator rather than
+ * here, because both need to know which campaign is being written.
+ */
 export function variables(contact: Pick<Contact, 'firstName' | 'lastName' | 'company' | 'title' | 'context'>) {
   return {
     first_name: contact.firstName ?? '',

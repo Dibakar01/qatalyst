@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
-import { consentStatus, emailStatus } from '@/db/schema'
+import { connectorKind, consentStatus, emailStatus } from '@/db/schema'
 import { COOKIE, requireAuth } from '@/lib/auth'
 import {
   approveMessage,
@@ -25,6 +25,13 @@ import type { Mapping, Row } from '@/lib/csv'
 import { generateForCampaign } from '@/lib/generate'
 import { batchSize } from '@/lib/rules'
 import { sendTick } from '@/lib/send'
+import { fromClock, saveTuning, tuning } from '@/lib/settings'
+import {
+  addSource as createSource,
+  enrichUnverified,
+  removeSource as dropSource,
+  runSource,
+} from '@/lib/sources'
 import { suppress, suppressDomain } from '@/lib/suppression'
 
 // Server actions are reachable by direct POST, so every one of them re-checks
@@ -107,7 +114,8 @@ export async function generateAction(formData: FormData) {
   await requireAuth()
   // `write 40` may ask for a bigger batch than the default, but not an
   // unbounded one — every draft is a model call.
-  await generateForCampaign(field(formData, 'id'), batchSize(field(formData, 'n')))
+  const { draftBatch } = await tuning()
+  await generateForCampaign(field(formData, 'id'), batchSize(field(formData, 'n'), draftBatch))
   refresh()
 }
 
@@ -147,6 +155,86 @@ export async function sendNow() {
   const tick = await sendTick()
   refresh()
   return tick
+}
+
+/* sources ----------------------------------------------------------------- */
+
+export async function addSource(formData: FormData) {
+  await requireAuth()
+  const kind = field(formData, 'kind')
+  if (!connectorKind.enumValues.includes(kind as never)) return
+
+  const campaignId = field(formData, 'campaign')
+  await createSource({
+    campaignId: campaignId || null,
+    kind: kind as (typeof connectorKind.enumValues)[number],
+    name: field(formData, 'name'),
+    config: {
+      // Apollo's search, and the exporter a push source expects. Unused keys
+      // for the other kind are simply absent.
+      titles: field(formData, 'titles'),
+      locations: field(formData, 'locations'),
+      domains: field(formData, 'domains'),
+      preset: field(formData, 'preset') || 'evaboot',
+    },
+  })
+  refresh()
+}
+
+/**
+ * Pull a source now.
+ *
+ * The error is swallowed on purpose: `runSource` has already written the reason
+ * onto the connector row, and the panel shows it there. Rethrowing would
+ * replace the page with an error screen and lose the very sentence explaining
+ * what went wrong.
+ */
+export async function runSourceAction(formData: FormData) {
+  await requireAuth()
+  try {
+    await runSource(field(formData, 'id'))
+  } catch {
+    // Recorded on the row by runSource().
+  }
+  refresh()
+}
+
+export async function removeSource(formData: FormData) {
+  await requireAuth()
+  await dropSource(field(formData, 'id'))
+  refresh()
+}
+
+/** Enrichment reports back through the URL, so a missing key says why. */
+export async function enrichContacts() {
+  await requireAuth()
+  let said: string
+  try {
+    said = await enrichUnverified()
+  } catch (cause) {
+    said = cause instanceof Error ? cause.message : String(cause)
+  }
+  refresh()
+  redirect(`/?view=book&said=${encodeURIComponent(said)}`)
+}
+
+/* settings ---------------------------------------------------------------- */
+
+export async function saveSettings(formData: FormData) {
+  await requireAuth()
+  const current = await tuning()
+  await saveTuning({
+    // The two clocks arrive as HH:MM from a native time input.
+    windowStart: fromClock(field(formData, 'window_start'), current.windowStart),
+    windowEnd: fromClock(field(formData, 'window_end'), current.windowEnd),
+    // Shown as a percentage, stored as basis points.
+    bounceThreshold: Math.round(Number(field(formData, 'bounce_threshold')) * 100),
+    bounceMinimum: field(formData, 'bounce_minimum'),
+    catchAllCap: field(formData, 'catch_all_cap'),
+    draftBatch: field(formData, 'draft_batch'),
+  })
+  refresh()
+  redirect('/?view=settings&saved=1')
 }
 
 export async function signOut() {

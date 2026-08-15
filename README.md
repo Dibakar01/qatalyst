@@ -91,6 +91,103 @@ there is no flash of the wrong one; the CSS and the letter's shader both read it
 from there, so they can never disagree. Type is Helvetica — already on every
 machine this runs on, so there is no webfont to load and no layout shift.
 
+## Qatalyst is a distribution system
+
+Not a mailer. Contacts arrive from several sources, go out through a campaign,
+and the funnel closes when someone writes back through the website — attributed
+to the letter that caused it.
+
+```
+  Apollo ─────┐
+  LinkedIn ───┤                                    ┌─▶ click  ─┐
+  CSV ────────┴──▶ contacts ──▶ campaign ──▶ sent ─┤           ├──▶ enquiry
+                                                    └─▶ reply ─┘
+```
+
+### Sources
+
+A connector's whole job is to produce rows and say which column is which.
+Everything after — deduplication, the suppression check, keeping unmapped
+columns as context, refusing a malformed address — is `runImport()`, the same
+code a hand-uploaded CSV goes through. There is deliberately no second import
+path, because a source that skipped it would be a source that can mail someone
+who asked us to stop.
+
+| | How | Status |
+|---|---|---|
+| **CSV** | Upload, map the columns by hand | Works |
+| **Apollo** | Add it to a letter's **Who** step, or account-wide under **Sources**. Pull on demand, or the worker pulls it daily | Enrichment works on the free plan; People Search is paid and the connector **says so** rather than returning an empty result |
+| **LinkedIn** | Add a source, copy the webhook URL it shows you, point your exporter at it | Works |
+
+Sales Navigator has **no export API**. In practice a list leaves LinkedIn
+through Evaboot, PhantomBuster or Clay — each spelling the same six fields
+differently, and that difference is the entire integration. `PRESETS` in
+`lib/connectors.ts` is a table of header names, not a scraper: nothing here
+automates a browser against LinkedIn, which is how accounts get restricted.
+
+```sh
+curl -X POST http://localhost:3000/api/ingest/evaboot \
+  -H "authorization: Bearer $INGEST_SECRET" \
+  -H "content-type: application/json" \
+  -d '[{"First Name":"Ada","Email":"ada@example.com","Company":"Analytical"}]'
+```
+
+Enrichment lives on the Contacts panel — it fills in what Apollo knows about
+addresses still marked `unverified`, including the status that decides whether
+they may ever be sent to. Deliberately not `runImport()`: those contacts already
+exist, so an import would report them all as duplicates and change nothing.
+
+`npm run send` works the queue *and* pulls any source that has not run today.
+One process, no scheduler, no new dependency.
+
+### The inbound end
+
+Put `{{link}}` in a letter's body and it becomes a tracked hop:
+
+```
+  {{link}} → /r/:token → records a click → /enquire?t=… → an enquiry
+```
+
+The token is the same HMAC scheme as unsubscribe — `base64url(payload).hmac`,
+nothing stored — carrying the contact and campaign, which resolve to exactly
+one message because `(campaign_id, contact_id)` is unique. An unsubscribe token
+cannot be replayed as a tracked link, and vice versa; both are tested.
+
+`/u/:token`, `/r/:token` and `/enquire` are the **entire** public surface. On
+the `PUBLIC_ONLY=1` deployment everything else — including the ingest door,
+which writes contacts — returns 404.
+
+## Control and proof
+
+The sending rules are **settings, not constants** — the sending window, the
+bounce threshold and its sample minimum, the catch-all cap and the draft batch
+all live in one row and are editable under **Settings**. Warming a domain wants
+different numbers than running an established one.
+
+They are **clamped, and the clamps are the point**. A bounce threshold is
+bounded to 1–8%; the window cannot open before 06:00 or close after 22:00; a
+window that would end before it starts is corrected rather than silently
+sending nothing all day. Tuning the rules is the point, turning them off is not.
+The bounds live in `LIMITS` in `lib/rules.ts`, beside the rules, and are tested.
+
+`allowanceNow()`, `shouldHalt()` and `maySend()` still take everything as
+arguments and default to today's values, so they remain pure functions testable
+with no database — which is why the whole existing suite passed unchanged
+through this refactor.
+
+**Reports** answers three questions, each from an aggregate over the rows that
+caused it rather than a counter kept alongside:
+
+| | Answers |
+|---|---|
+| By mailbox | Is it safe to send today? Bounce rate against the live threshold, sends against cap, how close to halting |
+| By source | Is what I am paying for producing anything? Contacts → sendable → sent → clicked → enquired, with the drop-off at each hop |
+| By letter | Is the writing landing? **Flag rate** is a prompt-quality signal — a letter flagging 40% has a prompt that invents things — plus click and reply rate |
+
+Plus how fast the list is being burned: suppressions only ever grow, so their
+growth rate is the honest measure of whether the outreach is working or
+annoying people.
+
 ## Setup
 
 Any Postgres works — local, Railway, Neon. The driver is `postgres.js` over the
@@ -149,7 +246,7 @@ so a backlog can never go out as a burst.
 
 | | |
 |---|---|
-| `npm test` | 30 pure-function checks — tokens, CSV mapping, templates, both validators, the sending rules, what the stamp asks for, the franking hash, and the letter's matrices. No database. |
+| `npm test` | 37 pure-function checks — tokens, CSV mapping, templates, both validators, the sending rules, what the stamp asks for, the franking hash, and the letter's matrices. No database. |
 | `npm run test:acceptance` | Phases 1–3 end to end. **Truncates tables**; refuses to run against anything but localhost. |
 | `npm run lint` / `npm run build` | |
 

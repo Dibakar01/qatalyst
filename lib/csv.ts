@@ -45,7 +45,7 @@ const EMAIL_STATUS_ALIASES: Record<string, EmailStatus> = {
   bounce: 'invalid',
 }
 
-const asEmailStatus = (raw: string): EmailStatus =>
+export const asEmailStatus = (raw: string): EmailStatus =>
   EMAIL_STATUS_ALIASES[raw.trim().toLowerCase().replace(/\s+/g, '_')] ?? 'unverified'
 
 // Consent is opt-in only when the CSV says so unambiguously.

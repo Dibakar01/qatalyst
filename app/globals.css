@@ -35,11 +35,19 @@
   --text-title: 20px;      /* the name of a surface */
   --text-display: 30px;    /* the one big number on a surface */
 
+  /* Leading tightens as size grows, and tracking goes with it. A single
+     letter-spacing across five sizes is wrong at both ends: large text reads
+     too loose, small text too tight. */
   --text-micro--line-height: 1.4;
+  --text-micro--letter-spacing: 0.01em;
   --text-small--line-height: 1.45;
+  --text-small--letter-spacing: 0.004em;
   --text-body--line-height: 1.5;
+  --text-body--letter-spacing: -0.006em;
   --text-title--line-height: 1.15;
+  --text-title--letter-spacing: -0.022em;
   --text-display--line-height: 1;
+  --text-display--letter-spacing: -0.034em;
 
   --font-sans: "Helvetica Neue", Helvetica, Arial, "Nimbus Sans", sans-serif;
 }
@@ -266,5 +274,43 @@ select option {
   ::view-transition-group(*) {
     animation-duration: 0s !important;
     animation-delay: 0s !important;
+  }
+}
+
+/* Reduced transparency is a separate preference from reduced motion, and it
+   asks for a frostier surface rather than no surface: raise the opacity and
+   drop the blur, keeping the layering that tells you what is on top. */
+@media (prefers-reduced-transparency: reduce) {
+  .panel {
+    background: var(--color-panel);
+    backdrop-filter: none;
+  }
+  .grain::before {
+    display: none;
+  }
+}
+
+/* More contrast wants defined edges, not just darker text. */
+@media (prefers-contrast: more) {
+  :root {
+    --line: color-mix(in oklab, var(--ink) 45%, transparent);
+    --dim: color-mix(in oklab, var(--ink) 82%, transparent);
+  }
+  .panel {
+    box-shadow: 0 0 0 1px var(--color-ink);
+  }
+}
+
+/* Feedback belongs on the press, not on the result. A control that does
+   nothing until its action resolves reads as broken on a slow connection. */
+button:active:not(:disabled),
+a[class*="rounded"]:active {
+  transform: scale(0.97);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  button,
+  a[class*="rounded"] {
+    transition: transform 100ms ease-out;
   }
 }

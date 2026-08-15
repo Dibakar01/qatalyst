@@ -1,3 +1,4 @@
+import { eq, or } from 'drizzle-orm'
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.ts'
 import { suppressions } from '../db/schema.ts'
@@ -26,8 +27,27 @@ export async function suppressionIndex() {
   return (email: string) => hashes.has(emailHash(email)) || domains.has(domainOf(email))
 }
 
+/**
+ * One address, by index seek.
+ *
+ * This is the check inside `deliver()`, so it runs once per send. It used to
+ * call `suppressionIndex()`, which loads the entire table — a full scan for
+ * every single email. Both unique indexes make this an O(1) probe instead, and
+ * unlike caching the index it cannot go stale: an address suppressed a second
+ * ago is seen by the very next send.
+ */
 export async function isSuppressed(email: string) {
-  return (await suppressionIndex())(email)
+  const domain = domainOf(email)
+  const [row] = await db
+    .select({ id: suppressions.id })
+    .from(suppressions)
+    .where(
+      domain
+        ? or(eq(suppressions.emailHash, emailHash(email)), eq(suppressions.domain, domain))
+        : eq(suppressions.emailHash, emailHash(email)),
+    )
+    .limit(1)
+  return Boolean(row)
 }
 
 /** Idempotent: unsubscribing twice, or bouncing after unsubscribing, is one row. */

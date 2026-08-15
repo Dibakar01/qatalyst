@@ -258,6 +258,25 @@ const NEIGHBOURS = 3
 /** A press that moves less than this many pixels was a click, not a drag. */
 const SLOP = 6
 
+/**
+ * Where a flick is going, not where it was released.
+ *
+ * Apple's projection from Designing Fluid Interfaces: exponential decay, not
+ * the textbook v²/2a. Snapping from the release point makes a hard flick feel
+ * identical to a slow drag; projecting means a throw actually throws.
+ */
+const project = (velocity: number, deceleration = 0.998) =>
+  (velocity / 1000) * (deceleration / (1 - deceleration))
+
+/**
+ * Resistance past the ends, rather than a wall.
+ *
+ * A hard stop reads as frozen — as if the app stopped listening. Continuous
+ * resistance reads as "still responding, but there is nothing more here".
+ */
+const rubberband = (overshoot: number, dimension = 1, constant = 0.55) =>
+  (overshoot * dimension * constant) / (dimension + constant * Math.abs(overshoot))
+
 export type Card = {
   id: string
   name: string
@@ -451,12 +470,25 @@ export default function Letter({
     let travelled = 0
     let last = { x: 0, y: 0 }
     let wheelLock = 0
+    // Dragging vertically walks the stack 1:1 rather than turning the letter:
+    // the content follows the finger, which is the whole of direct manipulation.
+    let scrub = 0
+    // Cards per second, measured off the pointer's own timestamps — the frame
+    // delta is not available in a pointer handler, and using it would measure
+    // the wrong interval anyway.
+    let scrubVelocity = 0
+    let lastMoveAt = 0
 
     const onDown = (event: PointerEvent) => {
       dragging = true
       travelled = 0
       spin = 0
       tilt = 0
+      // Grabbing a moving stack stops it dead, then follows the finger. Any
+      // animation must be interruptible at the instant it is touched.
+      scrub = live.current.active
+      scrubVelocity = 0
+      lastMoveAt = event.timeStamp
       last = { x: event.clientX, y: event.clientY }
       surface.setPointerCapture(event.pointerId)
       surface.style.cursor = 'grabbing'
@@ -467,8 +499,19 @@ export default function Letter({
       const dx = event.clientX - last.x
       const dy = event.clientY - last.y
       travelled += Math.abs(dx) + Math.abs(dy)
-      bankedYaw += dx * 0.006
-      bankedPitch += dy * 0.004
+
+      // Sideways turns the object; vertical moves through the stack. Deciding
+      // per-frame on the dominant axis keeps both available without a mode.
+      if (Math.abs(dx) > Math.abs(dy)) {
+        bankedYaw += dx * 0.006
+      } else {
+        const step = -dy / 260
+        scrub += step
+        const elapsed = event.timeStamp - lastMoveAt
+        if (elapsed > 0 && elapsed < 120) scrubVelocity = (step / elapsed) * 1000
+      }
+      bankedPitch += dy * 0.001
+      lastMoveAt = event.timeStamp
       last = { x: event.clientX, y: event.clientY }
     }
 
@@ -478,7 +521,14 @@ export default function Letter({
       // Losing the capture already released it; asking again throws.
       if (surface.hasPointerCapture(event.pointerId)) surface.releasePointerCapture(event.pointerId)
       surface.style.cursor = 'grab'
-      if (travelled < SLOP && event.type === 'pointerup') go.current('open')
+      if (travelled < SLOP && event.type === 'pointerup') return go.current('open')
+
+      // Land where the flick was going, not where the finger left. Projection
+      // is what makes a throw travel further than a nudge, and it is why the
+      // stack can be flicked through rather than stepped one at a time.
+      const last = Math.max(live.current.cards.length - 1, 0)
+      const landed = Math.round(Math.min(Math.max(scrub + project(scrubVelocity), 0), last))
+      step.current(landed - live.current.active)
     }
 
     const onKey = (event: KeyboardEvent) => {
@@ -542,7 +592,20 @@ export default function Letter({
       const { cards: deck, active: want, unfolded, shift: wantShift } = live.current
 
       unfold = still ? (unfolded ? 1 : 0) : ease(unfold, unfolded ? 1 : 0, 0.09, dt)
-      shown = still ? want : ease(shown, want, 0.12, dt)
+
+      if (dragging) {
+        // 1:1 with the finger, with progressive resistance past either end so
+        // the boundary feels like resistance rather than a frozen app.
+        const last = deck.length - 1
+        shown =
+          scrub < 0
+            ? rubberband(scrub)
+            : scrub > last
+              ? last + rubberband(scrub - last)
+              : scrub
+      } else {
+        shown = still ? want : ease(shown, want, 0.12, dt)
+      }
       placed = still ? wantShift : ease(placed, wantShift, 0.08, dt)
 
       if (dragging) {
