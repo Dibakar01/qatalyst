@@ -1,7 +1,7 @@
-import { and, desc, eq, inArray, isNotNull, isNull, notInArray, sql as raw } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNotNull, notInArray, sql as raw } from 'drizzle-orm'
 import { db } from '../db/index.ts'
 import { campaigns, contacts, messages, type Campaign, type Message } from '../db/schema.ts'
-import { SENDABLE } from './contacts.ts'
+import { audienceWhere } from './segments.ts'
 
 const tally = {
   drafts: raw<number>`count(*) filter (where ${messages.status} = 'draft')`.mapWith(Number),
@@ -33,13 +33,15 @@ export async function counts(id: string): Promise<Counts> {
 
 /** Contacts this campaign could still write to: sendable, not erased, not already drafted. */
 export async function audienceSize(campaignId: string) {
+  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId))
   const [row] = await db
     .select({ total: raw<number>`count(*)`.mapWith(Number) })
     .from(contacts)
     .where(
       and(
-        inArray(contacts.emailStatus, SENDABLE),
-        isNull(contacts.erasedAt),
+        // The same filter the generator uses, or the number on screen would
+        // promise an audience the draft run cannot find.
+        audienceWhere(campaign?.audienceSegments ?? [], campaign?.audienceStages ?? []),
         isNotNull(contacts.email),
         notInArray(
           contacts.id,
@@ -71,6 +73,8 @@ export async function saveCampaign(id: string, patch: Partial<Campaign>) {
       subjectTemplate: patch.subjectTemplate,
       bodyTemplate: patch.bodyTemplate,
       prompt: patch.prompt,
+      audienceSegments: patch.audienceSegments,
+      audienceStages: patch.audienceStages,
     })
     .where(eq(campaigns.id, id))
 }

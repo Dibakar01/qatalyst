@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
-import { connectorKind, consentStatus, emailStatus } from '@/db/schema'
+import { connectorKind, consentStatus, emailStatus, STAGES } from '@/db/schema'
 import { COOKIE, requireAuth } from '@/lib/auth'
 import {
   approveMessage,
@@ -23,8 +23,11 @@ import {
 } from '@/lib/contacts'
 import type { Mapping, Row } from '@/lib/csv'
 import { generateForCampaign } from '@/lib/generate'
+import { KINDS, shape, type Kind } from '@/lib/compose'
 import { batchSize } from '@/lib/rules'
 import { sendTick } from '@/lib/send'
+import { setDomainActive, setWarming } from '@/lib/domains'
+import { moveStage, tag, type Stage } from '@/lib/segments'
 import { fromClock, saveTuning, tuning } from '@/lib/settings'
 import {
   addSource as createSource,
@@ -78,6 +81,24 @@ export async function erase(formData: FormData) {
   redirect('/?view=book')
 }
 
+/* segments and stages ----------------------------------------------------- */
+
+export async function tagSelected(formData: FormData) {
+  await requireAuth()
+  const ids = formData.getAll('ids').map(String).filter(Boolean)
+  const name = field(formData, 'segment')
+  if (name) await tag(ids, name, field(formData, 'off') !== '1')
+  refresh()
+}
+
+export async function stageSelected(formData: FormData) {
+  await requireAuth()
+  const to = field(formData, 'stage')
+  if (!STAGES.includes(to as never)) return
+  await moveStage(formData.getAll('ids').map(String).filter(Boolean), to as Stage)
+  refresh()
+}
+
 export async function saveStatus(formData: FormData) {
   await requireAuth()
   const email = field(formData, 'email_status')
@@ -96,6 +117,44 @@ export async function newCampaign(formData: FormData) {
   const campaign = await createCampaign(name)
   refresh()
   redirect(`/?c=${campaign.id}`)
+}
+
+/**
+ * Create a letter from the three answers rather than a blank template.
+ *
+ * The composer asks what kind of message, what we genuinely know about these
+ * people, and the one thing being asked for. That is enough to assemble a
+ * subject, a body and the model's instruction — so nobody has to learn a
+ * mail-merge syntax to send their first letter.
+ */
+export async function composeCampaign(formData: FormData) {
+  await requireAuth()
+
+  const kind = field(formData, 'kind')
+  const chosen: Kind = KINDS.includes(kind as Kind) ? (kind as Kind) : 'intro'
+  const built = shape(chosen, field(formData, 'ask'), field(formData, 'signoff'))
+
+  // The fields they ticked are what the model is allowed to lean on. Naming
+  // them in the prompt is what keeps the generated line grounded in this list
+  // rather than in whatever the model imagines about the company.
+  const lean = formData.getAll('lean').map(String).filter(Boolean)
+  const prompt = lean.length
+    ? `${built.prompt}\n\nYou may use only these facts about them: ${lean.join(', ')}. If a fact is missing for this person, write a plainer sentence rather than inventing one.`
+    : built.prompt
+
+  const campaign = await createCampaign(field(formData, 'name') || 'Untitled letter')
+  await saveCampaign(campaign.id, {
+    name: field(formData, 'name') || 'Untitled letter',
+    subjectTemplate: built.subject,
+    bodyTemplate: built.body,
+    prompt,
+    // Who it is for. Empty means everyone sendable.
+    audienceSegments: formData.getAll('seg').map(String).filter(Boolean),
+    audienceStages: formData.getAll('stg').map(String).filter(Boolean),
+  })
+
+  refresh()
+  redirect(`/?c=${campaign.id}&step=1`)
 }
 
 export async function saveCampaignAction(formData: FormData) {
@@ -235,6 +294,28 @@ export async function saveSettings(formData: FormData) {
   })
   refresh()
   redirect('/?view=settings&saved=1')
+}
+
+/* domains ----------------------------------------------------------------- */
+
+/**
+ * Mark a domain as warming from today, or as already established.
+ *
+ * The whole reason to spread across domains is that each is warmed separately.
+ * Established means "already warmed" — its mailbox caps stand as configured.
+ */
+export async function warmDomain(formData: FormData) {
+  await requireAuth()
+  const warming = field(formData, 'warming') === '1'
+  await setWarming(field(formData, 'id'), warming ? new Date() : null)
+  refresh()
+}
+
+/** Pause every mailbox on a domain at once — the point of grouping them. */
+export async function toggleDomain(formData: FormData) {
+  await requireAuth()
+  await setDomainActive(field(formData, 'id'), field(formData, 'active') === '1')
+  refresh()
 }
 
 export async function signOut() {

@@ -203,3 +203,50 @@ export async function eraseContact(id: string) {
     })
     .where(eq(contacts.id, id))
 }
+
+/**
+ * Which fields this list can actually personalise from, and how complete each
+ * one is.
+ *
+ * A template that leans on {{title}} when a third of the list has no title
+ * produces a third of an email with a hole in it. Knowing the coverage before
+ * anything is generated is what lets the composer say so.
+ */
+export async function fieldCoverage() {
+  const [row] = await db
+    .select({
+      total: count(),
+      first_name: sql<number>`count(*) filter (where first_name is not null and first_name <> '')`.mapWith(Number),
+      last_name: sql<number>`count(*) filter (where last_name is not null and last_name <> '')`.mapWith(Number),
+      company: sql<number>`count(*) filter (where company is not null and company <> '')`.mapWith(Number),
+      title: sql<number>`count(*) filter (where title is not null and title <> '')`.mapWith(Number),
+    })
+    .from(contacts)
+    .where(and(inArray(contacts.emailStatus, SENDABLE), isNull(contacts.erasedAt)))
+
+  // Every distinct CSV column carried through as context, with its coverage —
+  // these are the ones worth personalising from, because they are the ones a
+  // competitor's template does not have.
+  const extras = await db.execute<{ key: string; n: number }>(sql`
+    select k.key, count(*)::int as n
+    from contacts c, lateral jsonb_object_keys(c.context) as k(key)
+    where c.erased_at is null
+      and c.email_status in ('verified','catch_all')
+      and coalesce(c.context ->> k.key, '') <> ''
+    group by k.key
+    order by 2 desc
+    limit 12
+  `)
+
+  const total = Number(row.total)
+  return {
+    total,
+    fields: [
+      { name: 'first_name', have: row.first_name },
+      { name: 'last_name', have: row.last_name },
+      { name: 'company', have: row.company },
+      { name: 'title', have: row.title },
+      ...extras.map((e) => ({ name: `context.${e.key}`, have: Number(e.n) })),
+    ].map((f) => ({ ...f, share: total > 0 ? f.have / total : 0 })),
+  }
+}

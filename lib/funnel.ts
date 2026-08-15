@@ -2,6 +2,7 @@ import { and, count, desc, eq } from 'drizzle-orm'
 import { db } from '../db/index.ts'
 import { campaigns, contacts, enquiries, events, messages } from '../db/schema.ts'
 import { isValidEmail, normalise } from './email.ts'
+import { advance } from './segments.ts'
 import type { Trace } from './token.ts'
 
 /**
@@ -88,6 +89,9 @@ export async function recordEnquiry(input: NewEnquiry) {
       body: (input.body ?? '').slice(0, LIMIT),
     })
     .returning()
+
+  // They wrote back — the pipeline learns that without anyone typing it.
+  if (contactId) await advance(contactId, 'replied')
 
   await db.insert(events).values({
     contactId,

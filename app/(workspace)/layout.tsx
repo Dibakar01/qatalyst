@@ -16,7 +16,7 @@ export default async function DeskLayout({ children }: LayoutProps<'/'>) {
 
   return (
     <div className="flex h-dvh flex-col">
-      <header className="relative flex shrink-0 items-center justify-center px-6 py-3">
+      <header className="chrome relative z-20 flex shrink-0 items-center justify-center px-6 py-3">
         <Link href="/" className="flex items-center gap-2">
           <Image src="/mark.png" alt="" width={18} height={18} priority className="rounded-[3px]" />
           <span className="font-semibold tracking-[-0.04em]">qatalyst</span>

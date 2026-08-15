@@ -174,8 +174,14 @@ export async function byLetter(): Promise<LetterRow[]> {
     select
       k.id::text, k.name, k.status::text,
       count(m.id)                                                     as written,
-      count(m.id) filter (where m.status = 'flagged'
-                            or jsonb_array_length(m.validator_flags) > 0) as flagged,
+      -- jsonb_array_length throws on a scalar, and one malformed row would
+      -- take the whole reports page down with it. The status is the real
+      -- signal; the flags array only refines it, so guard the type first.
+      count(m.id) filter (
+        where m.status = 'flagged'
+           or (jsonb_typeof(m.validator_flags) = 'array'
+               and jsonb_array_length(m.validator_flags) > 0)
+      ) as flagged,
       count(m.id) filter (where m.status = 'approved')                as approved,
       count(m.id) filter (where m.status in ('sent','bounced','replied')) as sent,
       count(distinct e.id) filter (where e.type = 'click')            as clicked,

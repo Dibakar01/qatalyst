@@ -12,19 +12,25 @@ import {
   sentLog,
   sentMessages,
 } from '@/lib/campaigns'
-import { contactStats, getContact, listContacts } from '@/lib/contacts'
+import { contactStats, fieldCoverage, getContact, listContacts } from '@/lib/contacts'
+import { KINDS, review, shape } from '@/lib/compose'
 import { enquiryCount, listEnquiries } from '@/lib/funnel'
 import { byLetter, byMailbox, bySource, listHealth } from '@/lib/reports'
 import { asClock, tuning } from '@/lib/settings'
+import { advise } from '@/lib/advice'
+import { attachAll, listDomains } from '@/lib/domains'
+import { audienceOf, listSegments, stageCounts } from '@/lib/segments'
+import { STAGES } from '@/db/schema'
 import { canPull, listSources, PUSH_PRESETS, pushUrl, readiness } from '@/lib/sources'
 import { LIMITS } from '@/lib/rules'
 import { isConfigured } from '@/lib/gmail'
-import { frankingCode, nextAction, shouldHalt, type Next } from '@/lib/rules'
+import { frankingCode, nextAction, shouldHalt, warmupCap, type Next } from '@/lib/rules'
 import { mailboxStats } from '@/lib/send'
 import { SLOT } from '@/lib/template'
 import {
   addSource,
   approve,
+  composeCampaign,
   approveAllClean,
   blockDomain,
   enrichContacts,
@@ -40,10 +46,15 @@ import {
   saveStatus,
   startSending,
   suppressEmail,
+  stageSelected,
   suppressSelected,
+  tagSelected,
+  toggleDomain,
+  warmDomain,
 } from './actions'
 import { CommandBar, ClearFilters, Filter, Postage, Search, Valve, type Box } from './console'
 import Importer from './importer'
+import Keys, { Shortcuts } from './keys'
 import Letter, { type Card } from '../letter'
 import {
   Drawer,
@@ -194,14 +205,21 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
   const find = one(sp.find).trim().toLowerCase()
   const hasPanel = Boolean(openId) || BOOK_VIEWS.has(view) || listed || making
 
+  // What Escape means from wherever you are: out of a drawer to its panel, out
+  // of a panel to the stack. Never a dead end.
+  const back = one(sp.contact) || one(sp.panel) ? `/?view=${view}` : hasPanel ? '/' : '/'
+
   return (
     <>
+      <Keys back={back} />
+      <Shortcuts />
+
       {/* ── the strip ──────────────────────────────────────────────────────
           One line, four zones, in the order you need them: what I can start,
           what needs me, where things are, how the machine is. The middle group
           is the navigation and it shows the open surface on every surface, so
           you can always get anywhere and always know where you are. */}
-      <header className="flex shrink-0 flex-wrap items-center gap-x-8 gap-y-3 border-b border-line px-6 py-3">
+      <header className="chrome relative z-20 flex shrink-0 flex-wrap items-center gap-x-8 gap-y-3 border-b border-line px-6 py-3">
         <Link href="/?new=1" className={small} aria-label="Start a new letter">
           + New letter
         </Link>
@@ -306,7 +324,7 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
             <div className="absolute inset-0 z-10 flex justify-center p-6 xl:justify-end">
               <div className="flex min-h-0 w-full max-w-[860px] flex-col">
                 {making ? (
-                  <NewLetterSheet />
+                  <ComposeSheet sp={sp} />
                 ) : openId ? (
                   <LetterSheet
                     id={openId}
@@ -404,32 +422,287 @@ function ListSheet({ cards, find }: { cards: Card[]; find: string }) {
   )
 }
 
-function NewLetterSheet() {
+/**
+ * Three questions, then a letter.
+ *
+ * What kind of message, what we actually know about these people, and the one
+ * thing being asked for. That is enough to write the subject, the body and the
+ * model's instruction — nobody should have to learn a mail-merge syntax to send
+ * their first letter.
+ *
+ * The shapes and the checks are in lib/compose.ts, from published cold-email
+ * research rather than taste: one ask, a subject about them, roughly a hundred
+ * words, and no link in a first touch.
+ */
+async function ComposeSheet({ sp }: { sp: Params }) {
+  const [coverage, segments, stages] = await Promise.all([
+    fieldCoverage(),
+    listSegments(),
+    stageCounts(),
+  ])
+  const picked = {
+    segments: (Array.isArray(sp.seg) ? sp.seg : sp.seg ? [sp.seg] : []).map(String),
+    stages: (Array.isArray(sp.stg) ? sp.stg : sp.stg ? [sp.stg] : []).map(String),
+  }
+  const reach = await audienceOf(picked.segments, picked.stages)
+  const kind = (KINDS as readonly string[]).includes(one(sp.kind)) ? one(sp.kind) : 'intro'
+  const preview = shape(kind as (typeof KINDS)[number], one(sp.ask), one(sp.signoff))
+  const notes = review(preview.subject, preview.body, SLOT)
+
+  const step = num(sp.at, 1)
+  const to = (patch: Record<string, string>) => {
+    const next = new URLSearchParams({ new: '1', kind, ...patch })
+    for (const k of ['ask', 'signoff', 'name'] as const) {
+      if (!(k in patch) && one(sp[k])) next.set(k, one(sp[k]))
+    }
+    for (const seg of picked.segments) next.append('seg', seg)
+    for (const stg of picked.stages) next.append('stg', stg)
+    return `/?${next.toString()}`
+  }
+
+  // Toggling one group in or out of the audience, without losing the rest.
+  const toggle = (key: 'seg' | 'stg', value: string) => {
+    const next = new URLSearchParams({ new: '1', kind, at: '2' })
+    for (const k of ['ask', 'signoff', 'name'] as const) if (one(sp[k])) next.set(k, one(sp[k]))
+    const on = key === 'seg' ? picked.segments : picked.stages
+    const other = key === 'seg' ? picked.stages : picked.segments
+    for (const v of on.includes(value) ? on.filter((x) => x !== value) : [...on, value]) {
+      next.append(key, v)
+    }
+    for (const v of other) next.append(key === 'seg' ? 'stg' : 'seg', v)
+    return `/?${next.toString()}`
+  }
+
   return (
     <Sheet
       label="New letter"
-      title="What is this one called?"
-      note="Only for you — the people you write to never see it."
+      title={step === 1 ? 'What kind of message?' : step === 2 ? 'Who is it for?' : 'What are you asking for?'}
+      note={
+        step === 1
+          ? 'Three moments, three different emails — not three wordings of one.'
+          : step === 2
+            ? 'The model may only use what you tick. Anything it cannot support, it leaves out.'
+            : 'One ask. Two questions make the reader decide before replying.'
+      }
       actions={
         <Link href="/" className={quiet} aria-label="Cancel">
           ✕
         </Link>
       }
     >
-      <form action={newCampaign} className="flex flex-1 flex-col justify-center gap-5 px-6">
-        <label className="block">
-          <span className="sr-only">Name</span>
-          <input
-            name="name"
-            placeholder="Autumn outreach"
-            autoFocus
-            className="w-full border-0 border-b border-line bg-transparent pb-2 text-display font-medium tracking-[-0.03em] transition-colors placeholder:text-dim/50 focus:border-primary"
-          />
-        </label>
-        <div className="flex items-center gap-3">
-          <button className={go}>Start it</button>
-          <span className="text-dim">
-            You will land inside it, on the message. Nothing sends until you say so.
+      <form action={composeCampaign} className="quiet-scroll flex min-h-0 flex-1 flex-col gap-6 p-6">
+        <input type="hidden" name="kind" value={kind} />
+
+        {/* ── 1 · which message ─────────────────────────────────────────── */}
+        {step === 1 && (
+          <div className="grid gap-3 sm:grid-cols-3">
+            {KINDS.map((k) => {
+              const s = shape(k, '', '')
+              const on = k === kind
+              return (
+                <Link
+                  key={k}
+                  href={to({ kind: k })}
+                  aria-current={on ? 'true' : undefined}
+                  className={`flex flex-col gap-2 rounded-[8px] border p-6 transition-colors ${
+                    on ? 'border-primary bg-primary/[0.05]' : 'border-line hover:bg-raise'
+                  }`}
+                >
+                  <span className={`font-medium ${on ? 'text-primary' : ''}`}>{s.label}</span>
+                  <span className="text-dim">{s.about}</span>
+                </Link>
+              )
+            })}
+          </div>
+        )}
+
+        {/* ── 2 · who it is for, and what we know ──────────────────────── */}
+        {step === 2 && (
+          <div className="flex flex-col gap-6">
+            {picked.segments.map((v) => (
+              <input key={v} type="hidden" name="seg" value={v} />
+            ))}
+            {picked.stages.map((v) => (
+              <input key={v} type="hidden" name="stg" value={v} />
+            ))}
+
+            <div className="flex flex-col gap-3">
+              <div className="flex items-baseline gap-3">
+                <Label>Who it goes to</Label>
+                <span className="ml-auto flex items-baseline gap-2">
+                  <span className="text-display font-medium leading-none text-primary">{reach}</span>
+                  <span className="text-dim">will get it</span>
+                </span>
+              </div>
+
+              {segments.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {segments.map((seg) => {
+                    const on = picked.segments.includes(seg.name)
+                    return (
+                      <Link
+                        key={seg.name}
+                        href={toggle('seg', seg.name)}
+                        aria-current={on ? 'true' : undefined}
+                        className={`flex items-center gap-2 rounded-full border px-3 py-2 transition-colors ${
+                          on ? 'border-primary bg-primary text-secondary' : 'border-line hover:bg-raise'
+                        }`}
+                      >
+                        {seg.name}
+                        <span className="tabular-nums opacity-70">{seg.sendable}</span>
+                      </Link>
+                    )
+                  })}
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-dim">how far along</span>
+                {stages.map((s) => {
+                  const on = picked.stages.includes(s.stage)
+                  return (
+                    <Link
+                      key={s.stage}
+                      href={toggle('stg', s.stage)}
+                      aria-current={on ? 'true' : undefined}
+                      className={`flex items-center gap-2 rounded-full border px-3 py-2 capitalize transition-colors ${
+                        on ? 'border-primary bg-primary text-secondary' : 'border-line hover:bg-raise'
+                      }`}
+                    >
+                      {s.stage}
+                      <span className="tabular-nums opacity-70">{s.n}</span>
+                    </Link>
+                  )
+                })}
+              </div>
+
+              <p className="text-dim">
+                {picked.segments.length + picked.stages.length === 0
+                  ? 'Nothing picked, so this goes to everyone who can be written to.'
+                  : 'Someone must match one of the groups and one of the stages.'}
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <Label>What the model may lean on</Label>
+              <p className="text-dim">
+                A field only some of them have leaves a hole in the rest, so the share matters more
+                than the name.
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {coverage.fields.map((f) => {
+                  const thin = f.share < 0.6
+                  return (
+                    <label
+                      key={f.name}
+                      className="flex items-center gap-3 rounded-[6px] border border-line px-3 py-2 transition-colors hover:bg-raise"
+                    >
+                      <input
+                        type="checkbox"
+                        name="lean"
+                        value={f.name}
+                        defaultChecked={f.share >= 0.8}
+                        className="size-3.5 shrink-0 accent-primary"
+                      />
+                      <span className="min-w-0 flex-1 truncate">{f.name}</span>
+                      <Bar value={f.share} danger={thin} />
+                      <span className={`w-12 text-right text-small tabular-nums ${thin ? 'text-primary' : 'text-dim'}`}>
+                        {Math.round(f.share * 100)}%
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── 3 · the ask, and what it becomes ──────────────────────────── */}
+        {step === 3 && (
+          <div className="flex flex-col gap-5">
+            <div className="grid gap-5 sm:grid-cols-2">
+              <label className="flex flex-col gap-2">
+                <Label>The one ask</Label>
+                <input
+                  name="ask"
+                  defaultValue={one(sp.ask) || 'Worth a short call next week?'}
+                  className={ruled}
+                />
+                <span className="text-dim">Small asks get answered. A demo is a big ask.</span>
+              </label>
+              <label className="flex flex-col gap-2">
+                <Label>Sign off as</Label>
+                <input name="signoff" defaultValue={one(sp.signoff) || 'Dibakar'} className={ruled} />
+              </label>
+            </div>
+
+            <label className="flex flex-col gap-2">
+              <Label>Call this letter</Label>
+              <input
+                name="name"
+                defaultValue={one(sp.name)}
+                placeholder="Autumn outreach"
+                className={ruled}
+                required
+              />
+              <span className="text-dim">Only you see this.</span>
+            </label>
+
+            {/* What it becomes, before it exists. */}
+            <div className="rounded-[6px] border border-line">
+              <p className="border-b border-line bg-raise px-3 py-2">
+                <span className="text-dim">Subject </span>
+                {preview.subject}
+              </p>
+              <pre className="whitespace-pre-wrap px-3 py-3 font-sans leading-[1.7]">{preview.body}</pre>
+              <p className="border-t border-line px-3 py-2 text-dim">
+                <strong className="font-medium text-ink">{'{{personalised}}'}</strong> is the only line
+                the model writes. Everything else is yours.
+              </p>
+            </div>
+
+            {notes.length > 0 && (
+              <ul className="flex flex-col gap-1">
+                {notes.map((n) => (
+                  <li key={n.text} className={n.level === 'stop' ? 'text-primary' : 'text-dim'}>
+                    {n.level === 'stop' ? '· ' : '· '}
+                    {n.text}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {/* ── where you are, and the way on ─────────────────────────────── */}
+        <div className="mt-auto flex items-center gap-3 border-t border-line pt-5">
+          <span className="flex items-center gap-1.5" aria-hidden>
+            {[1, 2, 3].map((n) => (
+              <span
+                key={n}
+                className={`h-1.5 rounded-full transition-all ${
+                  n === step ? 'w-5 bg-primary' : n < step ? 'w-1.5 bg-ink/50' : 'w-1.5 bg-line'
+                }`}
+              />
+            ))}
+          </span>
+          <span className="text-dim">step {step} of 3</span>
+
+          <span className="ml-auto flex items-center gap-3">
+            {step > 1 && (
+              <Link href={to({ at: String(step - 1) })} className={quiet}>
+                Back
+              </Link>
+            )}
+            {step < 3 ? (
+              <Link href={to({ at: String(step + 1) })} className={go}>
+                Next
+              </Link>
+            ) : (
+              <button className={go} disabled={notes.some((n) => n.level === 'stop')}>
+                Write it
+              </button>
+            )}
           </span>
         </div>
       </form>
@@ -485,6 +758,7 @@ async function LetterSheet({
   const capacity = active.reduce((total, box) => total + box.dailyCap, 0)
   const hasSlot = campaign.bodyTemplate.includes(`{{${SLOT}}}`)
   const written = tally.drafts + tally.flagged + tally.approved + tally.sent
+  const notes = review(campaign.subjectTemplate, campaign.bodyTemplate, SLOT)
   const step3 = (n: number) => `/?c=${id}&step=3&m=${n}`
 
   return (
@@ -513,52 +787,57 @@ async function LetterSheet({
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-hidden p-6">
+      <div className="quiet-scroll min-h-0 flex-1 p-6">
         {clause === 1 && (
-          <form action={saveCampaignAction} className="flex h-full flex-col gap-4">
+          <form action={saveCampaignAction} className="flex h-full flex-col gap-5">
             <input type="hidden" name="id" value={campaign.id} />
 
-            <div className="grid shrink-0 gap-4 sm:grid-cols-2">
-              <label className="block">
+            <div className="grid shrink-0 gap-5 sm:grid-cols-2">
+              <label className="flex flex-col gap-2">
                 <Label>Name</Label>
-                <input name="name" defaultValue={campaign.name} className={`${ruled} mt-1`} />
+                <input name="name" defaultValue={campaign.name} className={ruled} />
               </label>
-              <label className="block">
+              <label className="flex flex-col gap-2">
                 <Label>Subject</Label>
-                <input
-                  name="subject_template"
-                  defaultValue={campaign.subjectTemplate}
-                  className={`${ruled} mt-1`}
-                />
+                <input name="subject_template" defaultValue={campaign.subjectTemplate} className={ruled} />
               </label>
             </div>
 
-            <label className="flex min-h-0 flex-1 flex-col">
+            <label className="flex min-h-0 flex-1 flex-col gap-2">
               <Label>The body — {`{{${SLOT}}}`} is the one line the model writes</Label>
               <textarea
                 name="body_template"
                 defaultValue={campaign.bodyTemplate}
                 spellCheck={false}
-                className="mt-1.5 min-h-0 w-full flex-1 resize-none rounded-[4px] border border-line bg-raise px-3 py-2 leading-[1.7] transition-colors focus:border-primary"
+                className="min-h-0 w-full flex-1 resize-none rounded-[4px] border border-line bg-raise px-3 py-2 leading-[1.7] transition-colors focus:border-primary"
               />
             </label>
 
-            <label className="block shrink-0">
+            <label className="flex shrink-0 flex-col gap-2">
               <Label>What should that one line say?</Label>
               <textarea
                 name="prompt"
                 rows={2}
                 defaultValue={campaign.prompt}
-                className={`${field} mt-1.5 resize-none`}
+                className={`${field} resize-none`}
               />
             </label>
 
-            <div className="flex shrink-0 flex-wrap items-center gap-3">
+            {/* The practice checks, from lib/compose.ts. Advice, not gates. */}
+            {notes.length > 0 && (
+              <ul className="flex shrink-0 flex-col gap-1">
+                {notes.map((n) => (
+                  <li key={n.text} className={n.level === 'stop' ? 'text-primary' : 'text-dim'}>
+                    · {n.text}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <div className="flex shrink-0 items-center gap-3">
               <button className={ink}>Save the message</button>
               <span className="min-w-0 flex-1 truncate text-dim">
-                {hasSlot
-                  ? `{{first_name}} {{company}} {{title}} and {{context.Any CSV column}} also fill.`
-                  : `No {{${SLOT}}} in the body — nothing for the model to write.`}
+                {`{{first_name}} {{company}} {{title}}`} and {`{{context.Any CSV column}}`} also fill.
               </span>
             </div>
           </form>
@@ -567,7 +846,7 @@ async function LetterSheet({
         {clause === 2 && (
           <div className="flex h-full flex-col gap-5">
             <div className="flex items-baseline gap-4">
-              <p className="text-display font-medium leading-none tracking-[-0.03em]">{audience}</p>
+              <p className="text-display font-medium leading-none">{audience}</p>
               <p className="min-w-0 flex-1 text-dim">
                 {audience === 1 ? 'address' : 'addresses'} on the list this letter has not been
                 written to yet. Sources below feed that list.
@@ -589,7 +868,7 @@ async function LetterSheet({
         {clause === 3 && <Reading queue={queue} at={at} tally={tally} id={id} href={step3} />}
 
         {clause === 4 && (
-          <div className="flex h-full flex-col gap-4">
+          <div className="flex h-full flex-col gap-5">
             <div className="flex items-baseline gap-6">
               {(
                 [
@@ -598,13 +877,13 @@ async function LetterSheet({
                 ] as const
               ).map(([label, value]) => (
                 <div key={label}>
-                  <p className="text-display font-medium leading-none tracking-[-0.03em]">{value}</p>
-                  <p className="mt-1 text-dim">{label}</p>
+                  <p className="text-display font-medium leading-none">{value}</p>
+                  <p className="mt-2 text-dim">{label}</p>
                 </div>
               ))}
               <p className="min-w-0 flex-1 text-dim">
-                {active.length} active post {active.length === 1 ? 'box' : 'boxes'}, up to {capacity}{' '}
-                a day between them across 09:00–17:00. Above 3% bounces this letter stops on its own.
+                {active.length} active {active.length === 1 ? 'mailbox' : 'mailboxes'}, up to {capacity} a
+                day between them. Above the bounce threshold this letter stops on its own.
               </p>
             </div>
 
@@ -613,7 +892,7 @@ async function LetterSheet({
                 <input type="hidden" name="id" value={campaign.id} />
                 <button className={quiet}>Hold the post</button>
                 <span className="text-dim">
-                  <code>collect</code> works one collection by hand.
+                  <code>sendnow</code> works one send by hand.
                 </span>
               </form>
             ) : (
@@ -629,7 +908,7 @@ async function LetterSheet({
             {posted.length > 0 && (
               <div className="min-h-0">
                 <Label>Last postmarks</Label>
-                <ul className="mt-2 space-y-1 text-small tabular-nums text-dim">
+                <ul className="mt-2 flex flex-col gap-1 text-small tabular-nums text-dim">
                   {posted.map(({ message, contact }) => (
                     <li key={message.id} className="truncate">
                       {message.sentAt?.toISOString().slice(0, 16).replace('T', ' ')} → {contact.email}
@@ -662,9 +941,9 @@ async function LetterSheet({
 /**
  * One message under the pen, never a list.
  *
- * This is how a stack of letters is actually signed — you read one, you decide,
- * the next one comes up. Approving or discarding shortens the queue, so the
- * same index lands on the next message with no cursor to keep in sync.
+ * This is how a stack of letters is actually signed — read one, decide, the
+ * next comes up. Approving or discarding shortens the queue, so the same index
+ * lands on the next message with no cursor to keep in sync.
  */
 function Reading({
   queue,
@@ -685,8 +964,8 @@ function Reading({
         title={tally.approved > 0 ? 'Nothing left to read' : 'Nothing drafted yet'}
         note={
           tally.approved > 0
-            ? `${tally.approved} signed and ready to post.`
-            : 'Draft some on the round before this.'
+            ? `${tally.approved} approved and ready to send.`
+            : 'Draft some on the step before this.'
         }
       />
     )
@@ -696,19 +975,19 @@ function Reading({
 
   return (
     <div className="flex h-full flex-col gap-3">
-      <div className="flex shrink-0 flex-wrap items-baseline gap-x-2.5 gap-y-1">
+      <div className="flex shrink-0 flex-wrap items-baseline gap-3">
         <span className="font-medium">
           {[contact.firstName, contact.lastName].filter(Boolean).join(' ') || 'Unnamed'}
         </span>
         <span className="text-dim">{contact.email}</span>
         {contact.company && <span className="text-dim">· {contact.company}</span>}
-        <span className="ml-auto flex items-center gap-1.5">
+        <span className="ml-auto flex items-center gap-2">
           {message.validatorFlags.map((flag) => (
             <Stamp key={flag} tone="flagged">
               {flag}
             </Stamp>
           ))}
-          <span className="ml-1 text-dim tabular-nums">
+          <span className="text-dim tabular-nums">
             {index} of {queue.length}
           </span>
         </span>
@@ -728,51 +1007,47 @@ function Reading({
         <p className="text-primary">{message.error}</p>
       ) : (
         <div className="quiet-scroll min-h-0 flex-1 rounded-[4px] border border-line bg-raise p-6">
-          <p className="mb-3 border-b border-line pb-2.5">
+          <p className="mb-3 border-b border-line pb-2">
             <span className="text-dim">Subject </span>
             {message.subject}
           </p>
-          {/* The only thing on this desk a real person will ever read.
-              Everything else defers to it. */}
-          <pre className="whitespace-pre-wrap font-sans text-body leading-[1.75]">
-            {message.body}
-          </pre>
+          <pre className="whitespace-pre-wrap font-sans leading-[1.75]">{message.body}</pre>
         </div>
       )}
 
-      <div className="flex shrink-0 flex-wrap items-center gap-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-3">
         <form action={approve}>
           <input type="hidden" name="id" value={message.id} />
           <button className={go} disabled={Boolean(message.error)}>
-            Sign it
+            Approve
           </button>
         </form>
         <form action={reject}>
           <input type="hidden" name="id" value={message.id} />
-          <button className={quiet}>Throw away</button>
+          <button className={quiet}>Discard</button>
         </form>
 
         {tally.drafts > 0 && (
-          <form action={approveAllClean} className="ml-auto flex items-center gap-2">
+          <form action={approveAllClean} className="ml-auto flex items-center gap-3">
             <input type="hidden" name="id" value={id} />
-            <span className="text-dim">Marked ones are never signed in bulk.</span>
-            <button className={quiet}>Sign the {tally.drafts} clean</button>
+            <span className="text-dim">Flagged ones are never approved in bulk.</span>
+            <button className={quiet}>Approve the {tally.drafts} clean</button>
           </form>
         )}
       </div>
 
       {queue.length > 1 && (
-        <div className="flex shrink-0 items-center justify-center gap-2">
-          {index > 1 ? (
+        <div className="flex shrink-0 items-center justify-center gap-3">
+          {index > 1 && (
             <Link href={href(index - 1)} className={quiet}>
               ‹ back
             </Link>
-          ) : null}
-          {index < queue.length ? (
+          )}
+          {index < queue.length && (
             <Link href={href(index + 1)} className={quiet}>
               skip ›
             </Link>
-          ) : null}
+          )}
         </div>
       )}
     </div>
@@ -781,14 +1056,12 @@ function Reading({
 
 /* ── the address book ─────────────────────────────────────────────────────── */
 
+const fmt = (d: Date) =>
+  d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+
 const bookHref = (sp: Params, patch: Record<string, string | undefined>) => {
   const next = new URLSearchParams({ view: 'book' })
-  const base = {
-    q: one(sp.q),
-    status: one(sp.status),
-    consent: one(sp.consent),
-    page: one(sp.page),
-  }
+  const base = { q: one(sp.q), status: one(sp.status), consent: one(sp.consent), page: one(sp.page) }
   for (const [key, value] of Object.entries({ ...base, ...patch })) if (value) next.set(key, value)
   return `/?${next.toString()}`
 }
@@ -803,7 +1076,7 @@ async function BookSheet({ sp }: { sp: Params }) {
 
   return (
     <Sheet
-      label="Address book"
+      label="Contacts"
       title="Everyone we may write to"
       note={`${list.total.toLocaleString()} ${filtered ? 'matching' : 'on the list'}`}
       actions={
@@ -822,15 +1095,10 @@ async function BookSheet({ sp }: { sp: Params }) {
           <Link href={bookHref(sp, { panel: 'import' })} className={go}>
             Take in a CSV
           </Link>
-          <Link href="/" className={quiet} aria-label="Close">
-            ✕
-          </Link>
         </>
       }
     >
-      {said && (
-        <p className="shrink-0 border-b border-line bg-raise px-6 py-3">{said}</p>
-      )}
+      {said && <p className="shrink-0 border-b border-line bg-raise px-6 py-3">{said}</p>}
 
       <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-line px-6 py-3">
         <Search />
@@ -850,7 +1118,7 @@ async function BookSheet({ sp }: { sp: Params }) {
             {list.rows.map((contact) => (
               <div
                 key={contact.id}
-                className="flex items-center gap-3 border-b border-line px-6 py-3 transition-colors hover:bg-raise"
+                className="flex items-center gap-3 border-b border-line px-6 py-2 transition-colors hover:bg-raise"
               >
                 <input
                   type="checkbox"
@@ -862,40 +1130,57 @@ async function BookSheet({ sp }: { sp: Params }) {
                 <Link href={bookHref(sp, { contact: contact.id })} className="flex min-w-0 flex-1 gap-3">
                   <span className="w-40 shrink-0 truncate font-medium">
                     {[contact.firstName, contact.lastName].filter(Boolean).join(' ') || (
-                      <span className="italic text-dim">
-                        {contact.erasedAt ? 'erased' : 'unnamed'}
-                      </span>
+                      <span className="italic text-dim">{contact.erasedAt ? 'erased' : 'unnamed'}</span>
                     )}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-dim">{contact.email ?? '—'}</span>
                 </Link>
-                {contact.consentStatus === 'opted_in' && <Stamp tone="opted_in">opted in</Stamp>}
+                {contact.segments.slice(0, 2).map((seg) => (
+                  <Stamp key={seg} tone="none">
+                    {seg}
+                  </Stamp>
+                ))}
+                <Stamp tone={contact.stage === 'new' ? 'draft' : 'sent'}>{contact.stage}</Stamp>
                 <Stamp tone={contact.emailStatus}>{contact.emailStatus}</Stamp>
               </div>
             ))}
           </Ledger>
 
           {/* Appears only when something is ticked — a CSS :has() rule, no state. */}
-          <div className="hidden shrink-0 items-center gap-3 border-t border-line bg-raise px-6 py-3 group-has-[input:checked]:flex">
-            <button className={ink}>Return the selected</button>
-            <span className="text-dim">Permanent. They can never be written to again.</span>
+          <div className="hidden shrink-0 flex-wrap items-center gap-3 border-t border-line bg-raise px-6 py-3 group-has-[input:checked]:flex">
+            <input
+              name="segment"
+              placeholder="Add to a group…"
+              className={`${ruled} w-40`}
+              formAction={tagSelected}
+            />
+            <button className={quiet} formAction={tagSelected}>
+              Tag
+            </button>
+            <select name="stage" className={`${ruled} w-32 capitalize`} defaultValue="contacted">
+              {STAGES.map((st) => (
+                <option key={st} value={st}>
+                  {st}
+                </option>
+              ))}
+            </select>
+            <button className={quiet} formAction={stageSelected}>
+              Move stage
+            </button>
+            <span className="ml-auto flex items-center gap-3">
+              <span className="text-dim">Permanent:</span>
+              <button className={ink}>Never write to these</button>
+            </span>
           </div>
         </form>
       )}
 
       {list.pages > 1 && (
-        <Pager
-          page={list.page}
-          pages={list.pages}
-          href={(page) => bookHref(sp, { page: String(page) })}
-        />
+        <Pager page={list.page} pages={list.pages} href={(page) => bookHref(sp, { page: String(page) })} />
       )}
     </Sheet>
   )
 }
-
-const fmt = (d: Date) =>
-  d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
 
 async function BookDrawers({ sp }: { sp: Params }) {
   const openId = id(sp.contact)
@@ -906,18 +1191,18 @@ async function BookDrawers({ sp }: { sp: Params }) {
   return (
     <>
       {panel === 'import' && (
-        <Drawer title="Take in a CSV" label="Address book" closeHref={closed} wide>
+        <Drawer title="Take in a CSV" label="Contacts" closeHref={closed} wide>
           <Importer />
         </Drawer>
       )}
 
       {selected && (
         <Drawer
-          label="Address book"
+          label="Contacts"
           title={[selected.firstName, selected.lastName].filter(Boolean).join(' ') || 'Unnamed'}
           closeHref={closed}
         >
-          <div className="space-y-6">
+          <div className="flex flex-col gap-6">
             <dl className="grid grid-cols-[6.5rem_1fr] gap-y-2">
               {(
                 [
@@ -935,30 +1220,22 @@ async function BookDrawers({ sp }: { sp: Params }) {
             </dl>
 
             {!selected.erasedAt && (
-              <form action={saveStatus} className="space-y-2.5 rounded-[5px] border border-line p-4">
+              <form action={saveStatus} className="flex flex-col gap-3 rounded-[5px] border border-line p-6">
                 <input type="hidden" name="id" value={selected.id} />
                 <p className="font-medium">May we write to them?</p>
                 <p className="text-dim">
-                  Only verified and catch-all can ever be written to, and catch-all only from a post
-                  box flagged for it.
+                  Only verified and catch-all can ever be written to, and catch-all only from a
+                  mailbox flagged for it.
                 </p>
-                <div className="flex gap-2">
-                  <select
-                    name="email_status"
-                    defaultValue={selected.emailStatus}
-                    className={`${field} capitalize`}
-                  >
+                <div className="flex gap-3">
+                  <select name="email_status" defaultValue={selected.emailStatus} className={`${field} capitalize`}>
                     {emailStatus.enumValues.map((value) => (
                       <option key={value} value={value}>
                         {value.replace('_', ' ')}
                       </option>
                     ))}
                   </select>
-                  <select
-                    name="consent_status"
-                    defaultValue={selected.consentStatus}
-                    className={`${field} capitalize`}
-                  >
+                  <select name="consent_status" defaultValue={selected.consentStatus} className={`${field} capitalize`}>
                     {consentStatus.enumValues.map((value) => (
                       <option key={value} value={value}>
                         {value.replace('_', ' ')}
@@ -977,7 +1254,7 @@ async function BookDrawers({ sp }: { sp: Params }) {
               </pre>
             </div>
 
-            <div className="flex flex-wrap gap-2 border-t border-line pt-5">
+            <div className="flex flex-wrap gap-3 border-t border-line pt-5">
               {selected.email && (
                 <form action={suppressEmail}>
                   <input type="hidden" name="email" value={selected.email} />
@@ -992,7 +1269,7 @@ async function BookDrawers({ sp }: { sp: Params }) {
               )}
             </div>
             <p className="text-dim">
-              Erasing clears the personal fields and keeps the returned-register hash, so they stay
+              Erasing clears the personal fields and keeps the never-send hash, so they stay
               unwritable and a re-import cannot bring them back.
             </p>
           </div>
@@ -1005,26 +1282,11 @@ async function BookDrawers({ sp }: { sp: Params }) {
 /* ── everything that has gone ─────────────────────────────────────────────── */
 
 const when = (d: Date | null) =>
-  d
-    ? d.toLocaleString('en-GB', {
-        day: '2-digit',
-        month: 'short',
-        hour: '2-digit',
-        minute: '2-digit',
-      })
-    : '—'
+  d ? d.toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'
 
-/**
- * One place for everything that has left, across every letter.
- *
- * Keyed off the message status rather than a boolean, so when phase 4 starts
- * matching replies and bounces back to what we sent, they appear here without
- * another surface having to exist.
- */
 async function SentSheet({ q, page }: { q: string; page: number }) {
   const log = await sentLog({ q, page, size: ROWS })
-  const href = (n: number) =>
-    `/?view=sent&page=${n}${q ? `&q=${encodeURIComponent(q)}` : ''}`
+  const href = (n: number) => `/?view=sent&page=${n}${q ? `&q=${encodeURIComponent(q)}` : ''}`
 
   return (
     <Sheet
@@ -1039,22 +1301,13 @@ async function SentSheet({ q, page }: { q: string; page: number }) {
       {log.rows.length === 0 ? (
         <Empty
           title={q ? 'Nothing matches' : 'Nothing has gone yet'}
-          note={
-            q
-              ? 'Clear the search to see everything that has gone.'
-              : 'Approve some drafts and put a letter in the post.'
-          }
+          note={q ? 'Clear the search.' : 'Approve some drafts and put a letter in the post.'}
         />
       ) : (
         <Ledger>
           {log.rows.map(({ message, contact, campaign }) => (
-            <div
-              key={message.id}
-              className="flex items-baseline gap-3 border-b border-line px-6 py-3"
-            >
-              <span className="w-28 shrink-0 text-small tabular-nums text-dim">
-                {when(message.sentAt)}
-              </span>
+            <div key={message.id} className="flex items-baseline gap-3 border-b border-line px-6 py-3">
+              <span className="w-28 shrink-0 text-small tabular-nums text-dim">{when(message.sentAt)}</span>
               <span className="w-48 shrink-0 truncate">{contact.email}</span>
               <span className="min-w-0 flex-1 truncate text-dim">{contact.company ?? '—'}</span>
               <Link
@@ -1078,12 +1331,18 @@ async function SentSheet({ q, page }: { q: string; page: number }) {
 
 const asPercent = (n: number) => `${(n * 100).toFixed(1)}%`
 
-/** A bar that reads as a bar at a glance, without a chart library. */
+/**
+ * A bar, and only a bar.
+ *
+ * With two colours there is no categorical palette to encode identity with, so
+ * every chart here is magnitude in neutral ink and status in the one red. A
+ * bar that turns red has crossed something; a bar that does not has not.
+ */
 function Bar({ value, danger }: { value: number; danger?: boolean }) {
   return (
-    <span className="inline-flex h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-raise" aria-hidden>
+    <span className="inline-flex h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-line" aria-hidden>
       <span
-        className={danger ? 'bg-primary' : 'bg-ink/50'}
+        className={`rounded-full transition-[width] ${danger ? 'bg-primary' : 'bg-ink/55'}`}
         style={{ width: `${Math.min(Math.max(value, 0), 1) * 100}%` }}
       />
     </span>
@@ -1091,13 +1350,41 @@ function Bar({ value, danger }: { value: number; danger?: boolean }) {
 }
 
 /**
- * Three questions, three tables.
+ * The funnel for one source, drawn as the stages it actually has.
  *
- * Which source is worth paying for, whether it is safe to send today, and
- * whether the writing lands. Nothing here is a stored counter — every number
- * is an aggregate over the rows that caused it, so a report can never drift
- * out of step with what actually happened.
+ * A row of numbers cannot show a drop-off; adjacent bars on a shared scale can.
+ * Widths are relative to the widest stage so the collapse between two stages is
+ * the visible thing rather than the absolute counts.
  */
+function Funnel({ stages }: { stages: { name: string; n: number }[] }) {
+  const top = Math.max(...stages.map((s) => s.n), 1)
+  return (
+    <div className="flex items-end gap-1" aria-hidden>
+      {stages.map((stage) => (
+        <span key={stage.name} className="flex h-8 w-8 items-end" title={`${stage.name}: ${stage.n}`}>
+          <span
+            className="w-full rounded-t-[2px] bg-ink/30"
+            style={{ height: `${Math.max((stage.n / top) * 100, stage.n > 0 ? 8 : 2)}%` }}
+          />
+        </span>
+      ))}
+    </div>
+  )
+}
+
+/** A number that carries its own label, for the things worth reading first. */
+function Stat({ n, of, label, danger }: { n: string; of?: string; label: string; danger?: boolean }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="flex items-baseline gap-1">
+        <span className={`text-display font-medium leading-none ${danger ? 'text-primary' : ''}`}>{n}</span>
+        {of && <span className="text-dim">{of}</span>}
+      </p>
+      <p className="text-dim">{label}</p>
+    </div>
+  )
+}
+
 async function ReportsSheet() {
   const rules = await tuning()
   const [sources, boxes, letters, health] = await Promise.all([
@@ -1107,6 +1394,10 @@ async function ReportsSheet() {
     listHealth(),
   ])
 
+  const advice = advise({ mailboxes: boxes, sources, letters, tuning: rules })
+  const worst = boxes.reduce((a, b) => (b.towardHalt > (a?.towardHalt ?? -1) ? b : a), boxes[0])
+  const sentAll = letters.reduce((t, l) => t + l.sent, 0)
+  const repliedAll = letters.reduce((t, l) => t + l.replied, 0)
   const row = 'flex items-center gap-3 border-b border-line px-6 py-2 last:border-b-0'
   const head = 'flex items-center gap-3 bg-raise px-6 py-2 text-micro uppercase tracking-[0.14em] text-dim'
 
@@ -1114,34 +1405,84 @@ async function ReportsSheet() {
     <Sheet
       label="Reports"
       title="What is actually happening"
-      note="Every number is counted from the rows that caused it, not from a tally kept alongside."
+      note="Counted from the rows that caused it, never a tally kept alongside."
     >
       <div className="quiet-scroll min-h-0 flex-1">
-        {/* ── is it safe to send today ──────────────────────────────────── */}
-        <section>
-          <div className="flex items-baseline gap-3 px-6 pt-6">
-            <Label>Mailboxes</Label>
-            <span className="text-dim">
-              halting above {(rules.bounceThreshold / 100).toFixed(1)}% once {rules.bounceMinimum} have
-              been attempted
-            </span>
-            <Link href="/?view=settings" className="ml-auto text-dim underline-offset-4 hover:text-ink hover:underline">
-              tune
+        {/* ── what to do about it ────────────────────────────────────────
+            First, because a report you have to interpret yourself is a report
+            nobody reads twice. Every line names its own numbers, and nothing
+            speaks until it has a big enough sample to mean something. */}
+        <div className="flex flex-col gap-3 border-b border-line p-6">
+          {advice.map((note) => (
+            <div
+              key={note.title}
+              className={`flex flex-wrap items-baseline gap-3 rounded-[6px] border px-3 py-2 ${
+                note.level === 'urgent'
+                  ? 'border-primary/40 bg-primary/[0.05]'
+                  : 'border-line bg-raise/50'
+              }`}
+            >
+              <span
+                className={`shrink-0 ${note.level === 'urgent' ? 'text-primary' : 'text-dim'}`}
+                aria-hidden
+              >
+                {note.level === 'acted' ? '✓' : note.level === 'urgent' ? '!' : '·'}
+              </span>
+              <span className={`font-medium ${note.level === 'urgent' ? 'text-primary' : ''}`}>
+                {note.title}
+              </span>
+              {note.level === 'acted' && <Stamp tone="none">done for you</Stamp>}
+              <span className="min-w-0 flex-1 text-dim">{note.why}</span>
+              {note.fix && (
+                <Link href={note.fix.href} className={quiet}>
+                  {note.fix.label}
+                </Link>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* The three numbers worth reading before any table. */}
+        <div className="flex flex-wrap items-start gap-10 border-b border-line p-6">
+          <Stat
+            n={worst ? asPercent(worst.bounceRate) : '—'}
+            label={worst ? `worst bounce rate · ${worst.email.split('@')[0]}` : 'no mailboxes'}
+            danger={Boolean(worst && worst.towardHalt > 0.7)}
+          />
+          <Stat n={String(sentAll)} label="sent, all letters" />
+          <Stat
+            n={sentAll > 0 ? asPercent(repliedAll / sentAll) : '—'}
+            of={repliedAll > 0 ? `${repliedAll} replies` : undefined}
+            label="reply rate"
+          />
+          <div className="ml-auto max-w-xs text-dim">
+            Halting above {(rules.bounceThreshold / 100).toFixed(1)}% once {rules.bounceMinimum} have
+            been attempted.{' '}
+            <Link href="/?view=settings" className="underline underline-offset-4 hover:text-ink">
+              Tune
             </Link>
+          </div>
+        </div>
+
+        {/* ── is it safe to send today ──────────────────────────────────── */}
+        <section className="pt-6">
+          <div className="px-6">
+            <Label>Mailboxes · is it safe to send today</Label>
           </div>
           <div className="mt-3">
             <div className={head}>
               <span className="min-w-0 flex-1">mailbox</span>
-              <span className="w-20 text-right">today</span>
+              <span className="w-24 text-right">today</span>
               <span className="w-20 text-right">sent</span>
               <span className="w-24 text-right">bounced</span>
-              <span className="w-16" />
+              <span className="w-16 text-right">to halt</span>
             </div>
             {boxes.map((box) => (
               <div key={box.email} className={row}>
                 <span className="min-w-0 flex-1 truncate">{box.email}</span>
-                <span className="w-20 text-right tabular-nums text-dim">
-                  {box.sentToday}/{box.cap}
+                <span className="flex w-24 items-center justify-end gap-2">
+                  <Bar value={box.sentToday / Math.max(box.cap, 1)} />
+                  <span className="tabular-nums text-dim">{box.sentToday}</span>
                 </span>
                 <span className="w-20 text-right tabular-nums">{box.sentEver}</span>
                 <span className={`w-24 text-right tabular-nums ${box.towardHalt > 0.7 ? 'text-primary' : 'text-dim'}`}>
@@ -1157,27 +1498,38 @@ async function ReportsSheet() {
         </section>
 
         {/* ── which source is worth paying for ──────────────────────────── */}
-        <section className="mt-6">
-          <div className="flex items-baseline gap-3 px-6">
-            <Label>Sources</Label>
-            <span className="text-dim">where the contacts came from, and what they turned into</span>
+        <section className="pt-6">
+          <div className="px-6">
+            <Label>Sources · what each one turned into</Label>
           </div>
           <div className="mt-3">
             <div className={head}>
+              <span className="w-20">funnel</span>
               <span className="min-w-0 flex-1">source</span>
-              <span className="w-20 text-right">contacts</span>
-              <span className="w-20 text-right">sendable</span>
+              <span className="w-24 text-right">sendable</span>
               <span className="w-16 text-right">sent</span>
               <span className="w-16 text-right">clicks</span>
               <span className="w-24 text-right">enquiries</span>
             </div>
             {sources.map((source) => (
               <div key={source.source} className={row}>
+                <span className="w-20">
+                  <Funnel
+                    stages={[
+                      { name: 'contacts', n: source.contacts },
+                      { name: 'sendable', n: source.sendable },
+                      { name: 'sent', n: source.sent },
+                      { name: 'clicked', n: source.clicked },
+                      { name: 'enquired', n: source.enquired },
+                    ]}
+                  />
+                </span>
                 <span className="min-w-0 flex-1 truncate">{source.source}</span>
-                <span className="w-20 text-right tabular-nums">{source.contacts}</span>
-                <span className="w-20 text-right tabular-nums text-dim">
+                <span className="w-24 text-right tabular-nums text-dim">
                   {source.sendable}
-                  <span className="ml-1 opacity-60">{asPercent(source.sendable / Math.max(source.contacts, 1))}</span>
+                  <span className="ml-1 opacity-60">
+                    {asPercent(source.sendable / Math.max(source.contacts, 1))}
+                  </span>
                 </span>
                 <span className="w-16 text-right tabular-nums">{source.sent}</span>
                 <span className="w-16 text-right tabular-nums text-dim">{source.clicked}</span>
@@ -1197,15 +1549,14 @@ async function ReportsSheet() {
         </section>
 
         {/* ── is the writing landing ────────────────────────────────────── */}
-        <section className="mt-6">
-          <div className="flex items-baseline gap-3 px-6">
-            <Label>Letters</Label>
-            <span className="text-dim">a high flag rate means the prompt is inventing things</span>
+        <section className="pt-6">
+          <div className="px-6">
+            <Label>Letters · a high flag rate means the prompt invents things</Label>
           </div>
           <div className="mt-3">
             <div className={head}>
               <span className="min-w-0 flex-1">letter</span>
-              <span className="w-24 text-right">flagged</span>
+              <span className="w-28 text-right">flagged</span>
               <span className="w-16 text-right">sent</span>
               <span className="w-16 text-right">clicks</span>
               <span className="w-20 text-right">replies</span>
@@ -1215,8 +1566,17 @@ async function ReportsSheet() {
                 <Link href={`/?c=${letter.id}`} className="min-w-0 flex-1 truncate hover:underline">
                   {letter.name}
                 </Link>
-                <span className={`w-24 text-right tabular-nums ${letter.flagRate > 0.3 ? 'text-primary' : 'text-dim'}`}>
-                  {letter.written > 0 ? asPercent(letter.flagRate) : '—'}
+                <span className="flex w-28 items-center justify-end gap-2">
+                  {letter.written > 0 ? (
+                    <>
+                      <Bar value={letter.flagRate} danger={letter.flagRate > 0.3} />
+                      <span className={`tabular-nums ${letter.flagRate > 0.3 ? 'text-primary' : 'text-dim'}`}>
+                        {asPercent(letter.flagRate)}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-dim">—</span>
+                  )}
                 </span>
                 <span className="w-16 text-right tabular-nums">{letter.sent}</span>
                 <span className="w-16 text-right tabular-nums text-dim">{letter.clicked}</span>
@@ -1234,7 +1594,7 @@ async function ReportsSheet() {
         </section>
 
         {/* ── how fast the list is being burned ─────────────────────────── */}
-        <section className="mt-6 px-6 pb-6">
+        <section className="p-6">
           <Label>The list</Label>
           <p className="mt-2 text-dim">
             <strong className="font-medium text-ink">{health.total.toLocaleString()}</strong> can never
@@ -1251,42 +1611,58 @@ async function ReportsSheet() {
 /* ── settings ─────────────────────────────────────────────────────────────── */
 
 /**
- * The rules, as controls.
+ * The rules, as controls, each shown against the range it may live in.
  *
- * Every one of these was a constant. They are bounded on save — the bounds are
- * in lib/rules.ts beside the rules themselves and stated here, because a limit
- * you discover by hitting it is a bad limit.
+ * A limit you discover by hitting it is a bad limit, so every field states its
+ * bounds and why. The clamping itself is in lib/rules.ts beside the rules.
  */
 async function SettingsSheet({ saved }: { saved: boolean }) {
   const rules = await tuning()
-  const label = 'flex flex-col gap-2'
+  const span = rules.windowEnd - rules.windowStart
 
   return (
     <Sheet
       label="Settings"
       title="How hard to push"
-      note="Tighten these while a domain is warming. They are bounded — tuning the rules is the point, turning them off is not."
+      note="Tighten these while a domain is warming. Bounded — tuning the rules is the point, turning them off is not."
     >
       {saved && <p className="shrink-0 border-b border-line bg-raise px-6 py-3">Saved.</p>}
 
       <form action={saveSettings} className="quiet-scroll min-h-0 flex-1 p-6">
-        <div className="grid max-w-2xl gap-5 sm:grid-cols-2">
-          <label className={label}>
-            <Label>Send between</Label>
-            <span className="flex items-center gap-2">
-              <input type="time" name="window_start" defaultValue={asClock(rules.windowStart)} className={field} />
-              <span className="text-dim">and</span>
-              <input type="time" name="window_end" defaultValue={asClock(rules.windowEnd)} className={field} />
-            </span>
-            <span className="text-dim">
-              The daily cap is released evenly across this. {asClock(LIMITS.windowStart[0])}–
-              {asClock(LIMITS.windowEnd[1])} at the widest.
-            </span>
-          </label>
+        {/* The window, drawn as the day it describes. */}
+        <div className="mb-6 flex flex-col gap-3">
+          <Label>Send between</Label>
+          <div className="flex items-center gap-3">
+            <input type="time" name="window_start" defaultValue={asClock(rules.windowStart)} className={`${field} w-32`} />
+            <span className="text-dim">to</span>
+            <input type="time" name="window_end" defaultValue={asClock(rules.windowEnd)} className={`${field} w-32`} />
+            <span className="text-dim">{(span / 60).toFixed(1)} hours a day</span>
+          </div>
+          {/* One bar, one day. The filled part is when mail may go. */}
+          <span className="relative flex h-2 w-full overflow-hidden rounded-full bg-line" aria-hidden>
+            <span
+              className="absolute inset-y-0 bg-primary"
+              style={{
+                left: `${(rules.windowStart / 1440) * 100}%`,
+                width: `${(span / 1440) * 100}%`,
+              }}
+            />
+          </span>
+          <span className="flex justify-between text-small text-dim">
+            <span>00:00</span>
+            <span>12:00</span>
+            <span>24:00</span>
+          </span>
+          <span className="text-dim">
+            The daily cap is released evenly across this, so a worker down all morning cannot catch
+            up at five. {asClock(LIMITS.windowStart[0])}–{asClock(LIMITS.windowEnd[1])} at the widest.
+          </span>
+        </div>
 
-          <label className={label}>
+        <div className="grid max-w-2xl gap-6 sm:grid-cols-2">
+          <label className="flex flex-col gap-2">
             <Label>Stop a mailbox above</Label>
-            <span className="flex items-center gap-2">
+            <span className="flex items-center gap-3">
               <input
                 name="bounce_threshold"
                 type="number"
@@ -1294,48 +1670,52 @@ async function SettingsSheet({ saved }: { saved: boolean }) {
                 min={LIMITS.bounceThreshold[0] / 100}
                 max={LIMITS.bounceThreshold[1] / 100}
                 defaultValue={(rules.bounceThreshold / 100).toFixed(1)}
-                className={field}
+                className={`${field} w-24`}
               />
               <span className="text-dim">% bounces</span>
+              <Bar value={rules.bounceThreshold / LIMITS.bounceThreshold[1]} danger />
             </span>
             <span className="text-dim">
-              Between {LIMITS.bounceThreshold[0] / 100}% and {LIMITS.bounceThreshold[1] / 100}%. Above
-              that the domain is already in trouble.
+              {LIMITS.bounceThreshold[0] / 100}–{LIMITS.bounceThreshold[1] / 100}%. Above that the
+              domain is already in trouble by the time anything stops.
             </span>
           </label>
 
-          <label className={label}>
+          <label className="flex flex-col gap-2">
             <Label>Only after</Label>
-            <input
-              name="bounce_minimum"
-              type="number"
-              min={LIMITS.bounceMinimum[0]}
-              max={LIMITS.bounceMinimum[1]}
-              defaultValue={rules.bounceMinimum}
-              className={field}
-            />
+            <span className="flex items-center gap-3">
+              <input
+                name="bounce_minimum"
+                type="number"
+                min={LIMITS.bounceMinimum[0]}
+                max={LIMITS.bounceMinimum[1]}
+                defaultValue={rules.bounceMinimum}
+                className={`${field} w-24`}
+              />
+              <span className="text-dim">attempts</span>
+            </span>
             <span className="text-dim">
-              attempts. Below {LIMITS.bounceMinimum[0]} a bounce rate is noise, so one bad address
-              would stop everything.
+              Below {LIMITS.bounceMinimum[0]} a bounce rate is noise, so one bad address would stop
+              everything.
             </span>
           </label>
 
-          <label className={label}>
-            <Label>Catch-all addresses a day</Label>
+          <label className="flex flex-col gap-2">
+            <Label>Catch-all a day</Label>
             <input
               name="catch_all_cap"
               type="number"
               min={LIMITS.catchAllCap[0]}
               max={LIMITS.catchAllCap[1]}
               defaultValue={rules.catchAllCap}
-              className={field}
+              className={`${field} w-24`}
             />
             <span className="text-dim">
-              Per mailbox, and only from one flagged for them. Zero switches catch-all sending off.
+              Per mailbox, and only from one flagged for them. Zero switches catch-all off.
             </span>
           </label>
 
-          <label className={label}>
+          <label className="flex flex-col gap-2">
             <Label>Drafts per batch</Label>
             <input
               name="draft_batch"
@@ -1343,7 +1723,7 @@ async function SettingsSheet({ saved }: { saved: boolean }) {
               min={LIMITS.draftBatch[0]}
               max={LIMITS.draftBatch[1]}
               defaultValue={rules.draftBatch}
-              className={field}
+              className={`${field} w-24`}
             />
             <span className="text-dim">Each draft is one model call, so this is what a run costs.</span>
           </label>
@@ -1550,39 +1930,129 @@ async function RepliesSheet({ page }: { page: number }) {
 
 /* ── the post boxes, and the returned register ────────────────────────────── */
 
-function BoxesSheet({ boxes }: { boxes: Box[] }) {
-  const capacity = boxes.filter((box) => box.active).reduce((total, box) => total + box.cap, 0)
+/**
+ * The domains, and the mailboxes on each.
+ *
+ * Spreading across domains is what keeps the primary one alive: volume splits,
+ * each warms on its own clock, and one burning does not stop the others. The
+ * ramp is automatic — a young domain sends a handful a day and climbs to its
+ * configured cap over about three weeks, so nobody has to edit a number every
+ * morning for a fortnight.
+ */
+async function BoxesSheet({ boxes }: { boxes: Box[] }) {
+  // Any mailbox added before domains existed gets adopted on sight, so nobody
+  // has to name a domain by hand before they can use one.
+  await attachAll()
+  const domains = await listDomains()
+  // What could go out, and what actually can. Saying only the second reads as
+  // broken when the ramp is working fine and a key is simply missing.
+  const ready = domains.filter((d) => d.active)
+  const allowed = ready.reduce((t, d) => t + d.todayCap, 0)
+  const sendable = ready.filter((d) => d.connected).reduce((t, d) => t + d.todayCap, 0)
 
   return (
     <Sheet
-      label="Post boxes"
-      title="Where our letters go from"
-      note={`${boxes.length} configured, ${capacity} a day between them at full capacity.`}
-      actions={
-        <Link href="/" className={quiet} aria-label="Close">
-          ✕
-        </Link>
+      label="Sending"
+      title="Domains we send from"
+      note={
+        allowed === sendable
+          ? `${allowed} a day across ${ready.length} active ${ready.length === 1 ? 'domain' : 'domains'}, after warm-up.`
+          : `${allowed} a day allowed by warm-up across ${ready.length} ${
+              ready.length === 1 ? 'domain' : 'domains'
+            } — ${sendable} of it can actually send. The rest has no key yet and runs as a dry run.`
       }
     >
-      <div className="min-h-0 flex-1 overflow-hidden p-6">
-        <Valve boxes={boxes} />
-      </div>
-      <Ledger>
-        {boxes.map((box) => (
-          <div key={box.id} className="flex items-center gap-3 border-t border-line px-6 py-3">
-            <span className="min-w-0 flex-1 truncate font-medium">{box.email}</span>
-            {box.sendsCatchAll && <Stamp tone="catch_all">catch all · 10/day</Stamp>}
-            {box.halted && <Stamp tone="halted">halted</Stamp>}
-            {!box.active && <Stamp tone="paused">paused</Stamp>}
-            <span className="w-24 shrink-0 text-right text-small tabular-nums text-dim">
-              {box.sentToday}/{box.cap} today
-            </span>
+      <div className="quiet-scroll min-h-0 flex-1">
+        {/* How much may go out this minute, drawn against the clock. The only
+            number here that cannot be read off a list. */}
+        {boxes.length > 0 && (
+          <div className="border-b border-line p-6">
+            <Valve boxes={boxes} />
           </div>
-        ))}
-        {boxes.length === 0 && (
-          <Empty title="No post boxes" note={<code>npm run db:seed adds the first two.</code>} />
         )}
-      </Ledger>
+
+        {domains.map((domain) => {
+          const mine = boxes.filter((box) => box.email.endsWith(`@${domain.name}`))
+          const warming = domain.warmingDay !== null
+          // Three weeks to full cap, so the ramp doubles as a progress bar.
+          const through = warming ? Math.min((domain.warmingDay ?? 0) / 21, 1) : 1
+
+          return (
+            <section key={domain.id} className="border-b border-line last:border-b-0">
+              <div className="flex flex-wrap items-center gap-3 px-6 py-3">
+                <span className="text-primary">
+                  <Franking code={frankingCode(domain.id)} className="h-2.5 w-9" />
+                </span>
+                <span className="font-medium">{domain.name}</span>
+
+                {!domain.connected && <Stamp tone="flagged">no key</Stamp>}
+                {!domain.active && <Stamp tone="paused">paused</Stamp>}
+                {/* Warming is about the domain's age, not its credential —
+                    a domain with no key yet is still on day n of its ramp. */}
+                {warming && (
+                  <Stamp tone={domain.active ? 'sending' : 'paused'}>
+                    {`warming · day ${domain.warmingDay}`}
+                  </Stamp>
+                )}
+
+                <span className="ml-auto flex items-center gap-3">
+                  <Bar value={through} />
+                  <span className="w-24 text-right tabular-nums text-dim">
+                    {domain.todayCap}/day now
+                  </span>
+                </span>
+
+                <form action={warmDomain}>
+                  <input type="hidden" name="id" value={domain.id} />
+                  <input type="hidden" name="warming" value={warming ? '0' : '1'} />
+                  <button className={quiet}>{warming ? 'Mark established' : 'Start warming'}</button>
+                </form>
+                <form action={toggleDomain}>
+                  <input type="hidden" name="id" value={domain.id} />
+                  <input type="hidden" name="active" value={domain.active ? '0' : '1'} />
+                  <button className={quiet}>{domain.active ? 'Pause' : 'Resume'}</button>
+                </form>
+              </div>
+
+              {!domain.connected && (
+                <p className="px-6 pb-3 text-dim">
+                  Add <code className="text-ink">{domain.expects}</code> to <code>.env</code> and
+                  restart. Until then this domain sends as a dry run. The key never goes in the
+                  database.
+                </p>
+              )}
+
+              {mine.map((box) => {
+                const today = warmupCap(box.cap, domain.warmingDay)
+                return (
+                  <div
+                    key={box.id}
+                    className="flex items-center gap-3 border-t border-line bg-raise/40 px-6 py-2"
+                  >
+                    <span className="min-w-0 flex-1 truncate pl-6 text-dim">{box.email}</span>
+                    {box.sendsCatchAll && <Stamp tone="catch_all">catch all</Stamp>}
+                    {box.halted && <Stamp tone="halted">halted</Stamp>}
+                    <Bar value={box.sentToday / Math.max(today, 1)} danger={box.halted} />
+                    <span className="w-28 text-right tabular-nums text-dim">
+                      {box.sentToday}/{today}
+                      {today < box.cap && <span className="opacity-60"> of {box.cap}</span>}
+                    </span>
+                  </div>
+                )
+              })}
+            </section>
+          )
+        })}
+
+        {domains.length === 0 && (
+          <Empty title="No mailboxes yet" note={<code>npm run db:seed adds the first two.</code>} />
+        )}
+
+        <p className="p-6 text-dim">
+          Before any of this sends for real: SPF, DKIM and DMARC on each domain. Warm-up then runs
+          itself — about five a day climbing to the configured cap over three weeks.
+        </p>
+      </div>
     </Sheet>
   )
 }

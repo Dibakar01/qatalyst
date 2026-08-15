@@ -204,6 +204,212 @@ test('a typed batch size can never run away with the model budget', () => {
   assert.equal(batchSize('500'), 100, 'the ceiling holds however big the ask')
 })
 
+/* what the numbers say to do ----------------------------------------------- */
+
+const { advise, ENOUGH } = await import('./advice.ts')
+
+const TUNING = {
+  windowStart: 540, windowEnd: 1020, bounceThreshold: 300,
+  bounceMinimum: 20, catchAllCap: 10, draftBatch: 25,
+}
+const box = (p = {}) => ({
+  email: 'a@x.test', cap: 35, sentToday: 0, sentEver: 100, bounced: 0,
+  bounceRate: 0, catchAllShare: 0, halted: false, towardHalt: 0, ...p,
+})
+const letter = (p = {}) => ({
+  id: 'l1', name: 'A letter', status: 'sending', written: 0, flagged: 0, flagRate: 0,
+  approved: 0, sent: 0, clicked: 0, replied: 0, clickRate: 0, replyRate: 0, ...p,
+})
+const source = (p = {}) => ({
+  source: 's', contacts: 0, sendable: 0, written: 0, sent: 0, clicked: 0,
+  enquired: 0, yieldPerThousand: 0, daysToFirst: null, ...p,
+})
+const run = (i = {}) =>
+  advise({ mailboxes: [], sources: [], letters: [], tuning: TUNING, ...i })
+
+test('advice never fires on a sample too small to mean anything', () => {
+  // This is the whole difficulty. One enquiry from four sends looks like a
+  // spectacular rate and is nothing at all — advice that fires on noise gets
+  // ignored, and then the real advice gets ignored with it.
+  const tiny = run({
+    letters: [letter({ id: 'a', sent: 4, clicked: 1, clickRate: 0.25 }), letter({ id: 'b', sent: 3 })],
+    sources: [source({ source: 'apollo', contacts: 4, sendable: 1, sent: 4, enquired: 1, yieldPerThousand: 250 })],
+  })
+  assert.ok(!tiny.some((a) => a.title.includes('better than')), 'no winner declared on 4 sends')
+  assert.ok(!tiny.some((a) => a.title.includes('best source')), 'no best source on 4 sends')
+  assert.ok(!tiny.some((a) => a.title.includes('can be written to')), 'no source judged on 4 contacts')
+  assert.equal(tiny[0].title, 'Too early to tell')
+})
+
+test('a halted mailbox is reported as already handled, not as a task', () => {
+  const [first] = run({ mailboxes: [box({ halted: true, bounced: 8, sentEver: 92, bounceRate: 0.08 })] })
+  assert.equal(first.level, 'acted', 'the sender already did this')
+  assert.ok(first.why.includes('automatically'))
+  // Acted sorts first: not knowing the machine already stopped sending is how
+  // an afternoon gets spent wondering why nothing is going out.
+  const mixed = run({
+    mailboxes: [box({ halted: true, bounceRate: 0.08 }), box({ email: 'b@x.test', towardHalt: 0.9, bounceRate: 0.027, bounced: 3 })],
+  })
+  assert.equal(mixed[0].level, 'acted')
+  assert.equal(mixed[1].level, 'urgent')
+})
+
+test('approaching the line is urgent, because after it the damage is done', () => {
+  assert.equal(run({ mailboxes: [box({ towardHalt: 0.9, bounceRate: 0.027 })] })[0].level, 'urgent')
+  assert.notEqual(run({ mailboxes: [box({ towardHalt: 0.3 })] })[0].level, 'urgent')
+})
+
+test('a prompt that invents things is caught, once there are enough drafts', () => {
+  const bad = { written: ENOUGH.drafts, flagged: 6, flagRate: 0.5 }
+  assert.ok(run({ letters: [letter(bad)] }).some((a) => a.title.includes('inventing')))
+  // Same rate, too few drafts to judge.
+  assert.ok(!run({ letters: [letter({ ...bad, written: 4 })] }).some((a) => a.title.includes('inventing')))
+})
+
+test('a winner is only declared on a real difference, not a rounding error', () => {
+  const n = ENOUGH.outcome
+  const clear = run({
+    letters: [
+      letter({ id: 'a', name: 'Good', sent: n, clickRate: 0.1, replyRate: 0.02 }),
+      letter({ id: 'b', name: 'Bad', sent: n, clickRate: 0.01, replyRate: 0 }),
+    ],
+  })
+  assert.ok(clear.some((a) => a.title.includes('Good') && a.title.includes('better than')))
+
+  // Nearly identical: saying one won would be inventing a result.
+  const tie = run({
+    letters: [
+      letter({ id: 'a', name: 'A', sent: n, clickRate: 0.05 }),
+      letter({ id: 'b', name: 'B', sent: n, clickRate: 0.045 }),
+    ],
+  })
+  assert.ok(!tie.some((a) => a.title.includes('better than')))
+
+  // Two letters that both produced nothing have no winner either.
+  const dead = run({
+    letters: [letter({ id: 'a', name: 'A', sent: n }), letter({ id: 'b', name: 'B', sent: n })],
+  })
+  assert.ok(!dead.some((a) => a.title.includes('better than')))
+})
+
+test('an expensive source is named, and so is a good one', () => {
+  const junk = run({ sources: [source({ source: 'apollo', contacts: 400, sendable: 40 })] })
+  assert.ok(junk.some((a) => a.title.includes('10.0%') && a.title.includes('apollo')))
+
+  const n = ENOUGH.outcome
+  const good = run({
+    sources: [
+      source({ source: 'evaboot', contacts: 200, sendable: 200, sent: n, enquired: 6, yieldPerThousand: 150 }),
+      source({ source: 'apollo', contacts: 200, sendable: 200, sent: n, enquired: 1, yieldPerThousand: 25 }),
+    ],
+  })
+  assert.ok(good.some((a) => a.title.includes('evaboot') && a.title.includes('best source')))
+})
+
+test('an empty report says so rather than looking broken', () => {
+  const [only] = run()
+  assert.equal(only.title, 'Nothing has gone out yet')
+  assert.ok(only.why.includes('put a letter in the post'))
+})
+
+/* warming a domain --------------------------------------------------------- */
+
+const { warmupCap, daysSince, WARMUP_START } = await import('./rules.ts')
+
+test('a fresh domain starts small and never jumps to full cap', () => {
+  // Day one is the dangerous one: a brand new domain sending 35 is how it gets
+  // burned before it has any reputation to spend.
+  assert.equal(warmupCap(35, 0), WARMUP_START)
+  assert.equal(warmupCap(35, 1), 5)
+
+  // Monotonic — a ramp that ever goes backwards would look like a bug.
+  let previous = 0
+  for (let day = 0; day <= 40; day++) {
+    const today = warmupCap(35, day)
+    assert.ok(today >= previous, `day ${day} went backwards`)
+    assert.ok(today <= 35, `day ${day} exceeded the configured cap`)
+    previous = today
+  }
+})
+
+test('the ramp reaches the cap in about three weeks, as the docs promise', () => {
+  assert.ok(warmupCap(35, 14) < 35, 'still warming at two weeks')
+  assert.equal(warmupCap(35, 21), 35, 'full cap at three weeks')
+  assert.equal(warmupCap(35, 90), 35, 'and stays there')
+})
+
+test('warm-up can only ever lower a cap, never raise one', () => {
+  // A small mailbox cap must win over the ramp, or warming would quietly
+  // increase what someone deliberately set low.
+  assert.equal(warmupCap(3, 90), 3)
+  assert.equal(warmupCap(3, 0), 3, 'never above its own cap even on day one')
+  // An established domain is not warming at all.
+  assert.equal(warmupCap(35, null), 35)
+})
+
+test('a domain age is whole days, and absent when it was never started', () => {
+  const now = new Date('2026-08-15T09:00:00Z')
+  assert.equal(daysSince(null, now), null)
+  assert.equal(daysSince(new Date('2026-08-15T08:00:00Z'), now), 0, 'started today')
+  assert.equal(daysSince(new Date('2026-08-14T08:00:00Z'), now), 1)
+  assert.equal(daysSince(new Date('2026-07-25T09:00:00Z'), now), 21)
+})
+
+/* writing the letter ------------------------------------------------------- */
+
+const { review, shape, fieldsUsed, KINDS } = await import('./compose.ts')
+
+test('every shape produces a letter the generator can actually fill', () => {
+  // A shape that forgot the slot would produce a campaign that can never draft
+  // anything, and nothing downstream would say why.
+  for (const kind of KINDS) {
+    const s = shape(kind, 'Worth a word?', 'Dibakar')
+    assert.ok(s.body.includes('{{personalised}}'), `${kind} has no slot`)
+    assert.ok(s.subject.trim().length > 0, `${kind} has no subject`)
+    assert.ok(s.prompt.length > 40, `${kind} has no real instruction`)
+    assert.deepEqual(review(s.subject, s.body, 'personalised').filter((n) => n.level === 'stop'), [])
+  }
+})
+
+test('the ask and the sign-off actually land in the body', () => {
+  const s = shape('intro', 'Fifteen minutes on Thursday?', 'Ada')
+  assert.ok(s.body.includes('Fifteen minutes on Thursday?'))
+  assert.ok(s.body.trimEnd().endsWith('Ada'))
+  // An empty ask must not leave the letter without one.
+  assert.ok(shape('intro', '', '').body.includes('?'))
+})
+
+test('structural faults stop, style faults only warn', () => {
+  const stops = (n: { level: string }[]) => n.filter((x) => x.level === 'stop').length
+
+  assert.equal(stops(review('Hi', 'No slot here. Worth a word?', 'personalised')), 1)
+  assert.equal(stops(review('', '{{personalised}} Worth a word?', 'personalised')), 1)
+  // Tired phrasing is worth saying and never worth blocking — it is advice, and
+  // a checker that blocks on advice gets ignored.
+  const tired = review('Quick question', 'I hope this finds you well. {{personalised}} Worth a word?', 'personalised')
+  assert.equal(stops(tired), 0)
+  assert.ok(tired.length >= 2, 'both tired phrases noticed')
+})
+
+test('the checks catch what actually loses replies', () => {
+  const has = (notes: { text: string }[], bit: string) => notes.some((n) => n.text.includes(bit))
+
+  // Two asks give the reader a decision to make before replying.
+  assert.ok(has(review('x', '{{personalised}} Free? Thursday?', 'personalised'), '2 questions'))
+  // No ask at all leaves nothing to reply to.
+  assert.ok(has(review('x', '{{personalised}} Regards.', 'personalised'), 'nothing easy to reply to'))
+  // A raw link costs deliverability; the tracked one is offered instead.
+  assert.ok(has(review('x', '{{personalised}} see https://a.example ok?', 'personalised'), 'deliverability'))
+  assert.ok(has(review('A very long subject line about our platform today', '{{personalised}} ok?', 'personalised'), 'Subject is long'))
+})
+
+test('the fields a letter leans on are named, so the audience step can warn', () => {
+  const used = fieldsUsed('About {{company}}', 'Hi {{first_name}}, {{personalised}} {{link}}', 'mention {{title}}')
+  assert.deepEqual(used.sort(), ['company', 'first_name', 'title'])
+  // The two the generator supplies are never reported as missing data.
+  assert.ok(!used.includes('personalised') && !used.includes('link'))
+})
+
 /* the rules, once they are tunable ---------------------------------------- */
 
 const { clampTuning, LIMITS } = await import('./rules.ts')

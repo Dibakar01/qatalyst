@@ -227,7 +227,7 @@ export function CommandBar({
   }
 
   return (
-    <div className="relative shrink-0 border-t border-line px-6 py-3">
+    <div className="chrome relative z-20 shrink-0 border-t border-line px-6 py-3">
       {matches.length > 0 && (
         <ul className="panel absolute inset-x-5 bottom-full mb-2 overflow-hidden rounded-[6px]">
           {matches.map((cmd, index) => (

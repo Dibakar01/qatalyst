@@ -163,6 +163,37 @@ export function nextAction(
   return { label: tally.sent > 0 ? 'all posted' : 'nobody to write to', action: 'none', count: 0 }
 }
 
+/* ── warming a domain ─────────────────────────────────────────────────────── */
+
+/** A new domain starts here, however big its mailbox caps are. */
+export const WARMUP_START = 5
+/** Compounding daily, which reaches a 35/day cap in about three weeks. */
+export const WARMUP_RATE = 0.1
+
+/**
+ * What a mailbox on a young domain may actually send today.
+ *
+ * Spreading across domains only helps if each one is warmed, and warming by
+ * hand means editing a cap every morning for three weeks — which nobody does,
+ * which is how a fresh domain gets burned on day two. This makes the ramp a
+ * function of the domain's age instead of a chore.
+ *
+ * `startedAt` null means an established domain: it has already been warmed, so
+ * its configured cap stands.
+ */
+export function warmupCap(cap: number, daysWarming: number | null) {
+  if (daysWarming === null) return cap
+  const day = Math.max(Math.floor(daysWarming), 0)
+  const allowed = Math.floor(WARMUP_START * (1 + WARMUP_RATE) ** day)
+  return Math.max(Math.min(allowed, cap), Math.min(WARMUP_START, cap))
+}
+
+/** Whole days between then and now, for the ramp above. */
+export function daysSince(started: Date | null, now = new Date()) {
+  if (!started) return null
+  return Math.floor((now.getTime() - started.getTime()) / 86_400_000)
+}
+
 /** Rule 2: a mailbox bouncing above 3% halts its campaigns automatically. */
 export function shouldHalt(sent: number, bounced: number, tuning: Tuning = {}) {
   const threshold = (tuning.bounceThreshold ?? BOUNCE_THRESHOLD * 10_000) / 10_000

@@ -63,6 +63,18 @@ export const channel = pgEnum('channel', ['email'])
  */
 export const campaignKind = pgEnum('campaign_kind', ['outbound', 'response'])
 
+/**
+ * How far along a person is, in order.
+ *
+ * One stage each, and they move forward. The system advances what it actually
+ * knows — writing to someone makes them `contacted`, an enquiry makes them
+ * `replied` — so the pipeline reflects what happened rather than what somebody
+ * remembered to type. The last two are judgements and stay manual.
+ */
+export const stage = pgEnum('stage', ['new', 'contacted', 'replied', 'qualified', 'customer'])
+
+export const STAGES = stage.enumValues
+
 export const contacts = pgTable(
   'contacts',
   {
@@ -76,6 +88,18 @@ export const contacts = pgTable(
     linkedinUrl: text('linkedin_url'),
     source: text('source'),
     consentStatus: consentStatus('consent_status').notNull().default('none'),
+    /**
+     * Overlapping named groups: "SaaS founders", "met at PyCon".
+     *
+     * ponytail: a text[] with a GIN index rather than a segments table and a
+     * join. Segments carry no attributes beyond a name, so two tables would be
+     * two tables to keep in step for nothing. Renaming one rewrites the rows
+     * that have it — fine to a few hundred thousand contacts; promote to real
+     * tables if a segment ever needs to own anything.
+     */
+    segments: text('segments').array().notNull().default(sql`'{}'::text[]`),
+    stage: stage('stage').notNull().default('new'),
+    stageAt: timestamp('stage_at', { withTimezone: true }).notNull().defaultNow(),
     context: jsonb('context').$type<Record<string, string>>().notNull().default({}),
     erasedAt: timestamp('erased_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -87,6 +111,9 @@ export const contacts = pgTable(
     uniqueIndex('contacts_email_lower_key').on(sql`lower(${t.email})`),
     uniqueIndex('contacts_linkedin_url_key').on(t.linkedinUrl),
     index('contacts_company_idx').on(t.company),
+    index('contacts_stage_idx').on(t.stage),
+    // Containment queries (segments @> '{x}') need GIN, not btree.
+    index('contacts_segments_idx').using('gin', t.segments),
   ],
 )
 
@@ -118,6 +145,12 @@ export const campaigns = pgTable('campaigns', {
   bodyTemplate: text('body_template').notNull().default(''),
   prompt: text('prompt').notNull().default(''),
   status: campaignStatus('status').notNull().default('draft'),
+  /**
+   * Who this letter is for. Empty means everyone sendable, which is what a
+   * campaign written before segments existed still means.
+   */
+  audienceSegments: text('audience_segments').array().notNull().default(sql`'{}'::text[]`),
+  audienceStages: text('audience_stages').array().notNull().default(sql`'{}'::text[]`),
   channel: channel('channel').notNull().default('email'),
   kind: campaignKind('kind').notNull().default('outbound'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -148,9 +181,37 @@ export const settings = pgTable('settings', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
 
+/**
+ * A sending domain, and where its Google credential is found.
+ *
+ * Cold outbound spreads across several domains so the primary one survives:
+ * volume is split, each is warmed separately, and one burning does not stop
+ * the others. Google's domain-wide delegation is per-Workspace, so a domain in
+ * its own Workspace needs its own service account.
+ *
+ * `credentialKey` names an environment variable — `QALAKAAR` reads
+ * `GOOGLE_SA_QALAKAAR`. The key itself is never stored here, so a database
+ * backup never contains a Workspace-wide private key.
+ */
+export const domains = pgTable('domains', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull().unique(),
+  credentialKey: text('credential_key'),
+  /**
+   * When warming began. Null means established — already warmed, so its
+   * mailbox caps stand as configured.
+   */
+  warmingSince: timestamp('warming_since', { withTimezone: true }),
+  active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
 export const mailboxes = pgTable('mailboxes', {
   id: uuid('id').primaryKey().defaultRandom(),
   email: text('email').notNull().unique(),
+  // Null for mailboxes that predate domains; the sender falls back to the
+  // single legacy credential for those.
+  domainId: uuid('domain_id').references(() => domains.id, { onDelete: 'set null' }),
   dailyCap: integer('daily_cap').notNull().default(35),
   sendsCatchAll: boolean('sends_catch_all').notNull().default(false),
   active: boolean('active').notNull().default(true),
@@ -254,3 +315,4 @@ export type Mailbox = typeof mailboxes.$inferSelect
 export type Connector = typeof connectors.$inferSelect
 export type Enquiry = typeof enquiries.$inferSelect
 export type Settings = typeof settings.$inferSelect
+export type Domain = typeof domains.$inferSelect

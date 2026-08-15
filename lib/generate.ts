@@ -1,8 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk'
-import { and, eq, isNotNull, isNull, inArray, notInArray } from 'drizzle-orm'
+import { and, eq, isNotNull, notInArray } from 'drizzle-orm'
 import { db } from '../db/index.ts'
 import { campaigns, contacts, messages, type Campaign, type Contact } from '../db/schema.ts'
-import { SENDABLE } from './contacts.ts'
+import { advance, audienceWhere } from './segments.ts'
 import { suppressionIndex } from './suppression.ts'
 import { trackedUrl, unsubscribeUrl } from './token.ts'
 import { assembleBody, fill, SLOT, variables } from './template.ts'
@@ -88,8 +88,9 @@ export async function generateForCampaign(campaignId: string, limit = 100): Prom
     .from(contacts)
     .where(
       and(
-        inArray(contacts.emailStatus, SENDABLE),
-        isNull(contacts.erasedAt),
+        // Whoever this letter is for: its segments and stages, or everyone
+        // sendable when it names none.
+        audienceWhere(campaign.audienceSegments, campaign.audienceStages),
         isNotNull(contacts.email),
         notInArray(contacts.id, already),
       ),
@@ -158,6 +159,8 @@ export async function generateForCampaign(campaignId: string, limit = 100): Prom
     )
 
     await db.insert(messages).values(written).onConflictDoNothing()
+    // Writing to someone is the first thing the pipeline can know for itself.
+    for (const row of written) await advance(row.contactId, 'contacted')
     for (const row of written) {
       if (row.error) result.failed++
       else if (row.status === 'flagged') result.flagged++

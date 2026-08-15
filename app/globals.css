@@ -152,13 +152,34 @@ body {
   mix-blend-mode: overlay;
 }
 
-/* Working surfaces float over the stage: opaque, because dense text on a lit
-   translucent panel is unreadable in both themes. */
+/* ── Materials ──────────────────────────────────────────────────────────────
+   A working surface is a real material arriving, not a rectangle appearing.
+   Translucent enough that the stage shows through and you can tell what is on
+   top of what; blurred hard enough that dense text on it stays legible.
+
+   Bigger surfaces read as thicker: the panel blurs more and casts further than
+   the small bar, because that is how depth is actually perceived. */
 .panel {
-  background: var(--color-panel);
+  background: color-mix(in oklab, var(--color-panel) 86%, transparent);
+  backdrop-filter: blur(30px) saturate(180%);
   box-shadow:
     0 0 0 1px var(--color-line),
+    0 1px 0 color-mix(in oklab, var(--color-ink) 6%, transparent) inset,
     0 30px 70px -22px rgb(0 0 0 / 0.5);
+}
+
+/* Chrome is a lighter material than a working surface — it sits above content
+   without competing with it. Never stack one of these on another. */
+.chrome {
+  background: color-mix(in oklab, var(--color-ground) 72%, transparent);
+  backdrop-filter: blur(22px) saturate(160%);
+}
+
+/* A scroll edge, not a hard divider: content fades where it passes under
+   floating chrome rather than being cut by a line. */
+.edge-top {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 18px);
+  mask-image: linear-gradient(to bottom, transparent, #000 18px);
 }
 
 /* ── Stamps ─────────────────────────────────────────────────────────────────
@@ -226,23 +247,32 @@ select option {
   animation: none;
 }
 
+/* Enter and exit along the same path: a surface that arrives from below leaves
+   downward. The curves are inverses of each other, so the return mirrors the
+   outbound rather than being a different motion that happens to end up there.
+
+   Materialise rather than fade — blur and scale move together, so the surface
+   reads as a material forming instead of a picture becoming opaque. */
 ::view-transition-old(.screen) {
-  animation: 110ms ease-in both panel-out;
+  animation: 140ms cubic-bezier(1, 0, 0.68, 0.28) both panel-out;
 }
 ::view-transition-new(.screen) {
-  animation: 240ms cubic-bezier(0.32, 0.72, 0, 1) 90ms both panel-settle;
+  animation: 320ms cubic-bezier(0.32, 0.72, 0, 1) both panel-settle;
 }
 
 @keyframes panel-out {
   to {
     opacity: 0;
+    transform: translateY(6px) scale(0.994);
+    filter: blur(3px);
   }
 }
 
 @keyframes panel-settle {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(10px) scale(0.992);
+    filter: blur(6px);
   }
 }
 
@@ -269,11 +299,26 @@ select option {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  ::view-transition-old(*),
-  ::view-transition-new(*),
-  ::view-transition-group(*) {
-    animation-duration: 0s !important;
-    animation-delay: 0s !important;
+  /* Not "no feedback" — a gentler, non-vestibular equivalent. The surface
+     still tells you it changed; it just does not travel or blur to do it. */
+  ::view-transition-old(.screen),
+  ::view-transition-new(.screen) {
+    animation-duration: 160ms !important;
+    animation-timing-function: ease !important;
+  }
+  @keyframes panel-out {
+    to {
+      opacity: 0;
+    }
+  }
+  @keyframes panel-settle {
+    from {
+      opacity: 0;
+    }
+  }
+  .panel-in,
+  .veil-in {
+    animation: none;
   }
 }
 
@@ -281,7 +326,8 @@ select option {
    asks for a frostier surface rather than no surface: raise the opacity and
    drop the blur, keeping the layering that tells you what is on top. */
 @media (prefers-reduced-transparency: reduce) {
-  .panel {
+  .panel,
+  .chrome {
     background: var(--color-panel);
     backdrop-filter: none;
   }

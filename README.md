@@ -157,6 +157,55 @@ cannot be replayed as a tracked link, and vice versa; both are tested.
 the `PUBLIC_ONLY=1` deployment everything else — including the ingest door,
 which writes contacts — returns 404.
 
+## Writing a letter
+
+Three questions, not a blank template. What kind of message — first time, no
+answer yet, or long time, because those are three different emails rather than
+three wordings of one. What you actually know about these people, shown as the
+**share of the list that has each field**, so a template cannot quietly lean on
+something 40% of them lack. And the one thing you are asking for.
+
+That is enough to assemble the subject, the body and the model's instruction.
+The shapes and the checks are in `lib/compose.ts` and come from published
+cold-email guidance rather than taste: one ask, a subject about them rather than
+the product, roughly a hundred words, no link in a first touch, and none of the
+openings that announce a template (`I hope this finds you well`, `just following
+up`, `quick question`).
+
+The checks split into **stop** and **warn**, and the split is the point: a
+missing `{{personalised}}` is structural and blocks, tired phrasing is advice
+and never does. A checker that blocks on advice gets ignored.
+
+## Sending from several domains
+
+Cold outbound spreads across domains so the primary one survives: volume splits
+between them, each warms on its own clock, and one burning does not stop the
+rest.
+
+**Warm-up is automatic**, which is the only reason spreading actually helps.
+Warming by hand means editing a cap every morning for three weeks, which nobody
+does — so the ramp is a function of the domain's age instead: about five a day
+on day one, climbing to the configured cap over three weeks. It can only ever
+*lower* a cap, never raise one, so a mailbox deliberately set to 3/day stays
+there. `warmupCap()` in `lib/rules.ts`, tested.
+
+```
+day  0 │ █████                               5/day
+day  7 │ █████████                           9/day
+day 14 │ ██████████████████                  18/day
+day 21 │ ███████████████████████████████████ 35/day
+```
+
+**Keys never touch the database.** Domain-wide delegation is per Workspace, so
+each domain names an environment variable — `qalakaar.com` reads
+`GOOGLE_SA_QALAKAAR_COM` — and the database stores only that name. The Sending
+screen shows which variable each domain wants and whether it was found. A
+domain without one falls back to `GOOGLE_SERVICE_ACCOUNT_JSON`, so an existing
+single-domain setup keeps working unchanged.
+
+Pausing a domain stops every mailbox on it at once, which is the point of
+grouping them.
+
 ## Control and proof
 
 The sending rules are **settings, not constants** — the sending window, the
@@ -246,7 +295,7 @@ so a backlog can never go out as a burst.
 
 | | |
 |---|---|
-| `npm test` | 37 pure-function checks — tokens, CSV mapping, templates, both validators, the sending rules, what the stamp asks for, the franking hash, and the letter's matrices. No database. |
+| `npm test` | 46 pure-function checks — tokens, CSV mapping, templates, both validators, the sending rules, what the stamp asks for, the franking hash, and the letter's matrices. No database. |
 | `npm run test:acceptance` | Phases 1–3 end to end. **Truncates tables**; refuses to run against anything but localhost. |
 | `npm run lint` / `npm run build` | |
 

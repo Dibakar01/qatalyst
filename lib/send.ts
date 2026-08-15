@@ -1,8 +1,8 @@
 import { and, eq, inArray, isNull, sql as raw } from 'drizzle-orm'
 import { db } from '../db/index.ts'
-import { campaigns, contacts, events, mailboxes, messages } from '../db/schema.ts'
+import { campaigns, contacts, domains, events, mailboxes, messages } from '../db/schema.ts'
 import { deliver, isConfigured } from './gmail.ts'
-import { allowanceNow, maySend, shouldHalt } from './rules.ts'
+import { allowanceNow, daysSince, maySend, shouldHalt, warmupCap } from './rules.ts'
 import { tuning } from './settings.ts'
 import { suppressionIndex } from './suppression.ts'
 
@@ -60,7 +60,13 @@ export async function mailboxStats(mailboxId: string, now = new Date()): Promise
  */
 export async function sendTick(now = new Date()): Promise<TickResult> {
   const result: TickResult = { sent: 0, halted: [], dryRun: !isConfigured(), detail: [] }
-  const boxes = await db.select().from(mailboxes).where(eq(mailboxes.active, true))
+  // Each mailbox arrives with its domain, because the domain decides both the
+  // credential to send with and how much of its cap has been earned so far.
+  const boxes = await db
+    .select({ mailbox: mailboxes, domain: domains })
+    .from(mailboxes)
+    .leftJoin(domains, eq(domains.id, mailboxes.domainId))
+    .where(eq(mailboxes.active, true))
   if (boxes.length === 0) return result
 
   // Read once per tick, not per mailbox: the rules must not change halfway
@@ -68,7 +74,11 @@ export async function sendTick(now = new Date()): Promise<TickResult> {
   const rules = await tuning()
   const suppressed = await suppressionIndex()
 
-  for (const mailbox of boxes) {
+  for (const { mailbox, domain } of boxes) {
+    // A domain paused by hand stops every mailbox on it at once — which is the
+    // point of grouping them: one bad domain does not take the others down.
+    if (domain && !domain.active) continue
+
     const counts = await mailboxStats(mailbox.id, now)
 
     if (shouldHalt(counts.sentEver, counts.bouncedEver, rules)) {
@@ -95,8 +105,11 @@ export async function sendTick(now = new Date()): Promise<TickResult> {
       continue
     }
 
+    // Warm-up can only ever lower the cap, so a young domain sends a handful a
+    // day and an established one sends what it was configured for.
+    const cap = warmupCap(mailbox.dailyCap, daysSince(domain?.warmingSince ?? null, now))
     const allowance = Math.min(
-      allowanceNow(mailbox.dailyCap, counts.sentToday, minuteOfDay(now), rules),
+      allowanceNow(cap, counts.sentToday, minuteOfDay(now), rules),
       PER_TICK,
     )
     if (allowance <= 0) continue
@@ -135,7 +148,13 @@ export async function sendTick(now = new Date()): Promise<TickResult> {
       }
 
       try {
-        const delivery = await deliver(mailbox.email, contact.email, message.subject, message.body)
+        const delivery = await deliver(
+          mailbox.email,
+          contact.email,
+          message.subject,
+          message.body,
+          domain?.credentialKey,
+        )
         await db
           .update(messages)
           .set({

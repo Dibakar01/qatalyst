@@ -1,4 +1,5 @@
 import { createSign } from 'node:crypto'
+import { credentialFor } from './domains.ts'
 import { isSuppressed } from './suppression.ts'
 
 const SCOPE = 'https://www.googleapis.com/auth/gmail.send'
@@ -7,14 +8,23 @@ const API = 'https://gmail.googleapis.com/gmail/v1/users/me/messages'
 
 type ServiceAccount = { client_email: string; private_key: string }
 
-function credentials(): ServiceAccount | null {
-  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON
+/**
+ * The service account for one sending domain.
+ *
+ * Domain-wide delegation is per-Workspace, so domains in separate Workspaces
+ * need separate accounts. `credentialKey` names the environment variable
+ * holding it; without one this falls back to the single legacy key, so an
+ * installation that never split its sending is unaffected.
+ */
+function credentials(credentialKey?: string | null): ServiceAccount | null {
+  const raw = credentialFor(credentialKey)
   if (!raw) return null
   const parsed = JSON.parse(raw) as ServiceAccount
   // Env files usually carry the key with literal \n rather than real newlines.
   return { ...parsed, private_key: parsed.private_key.replace(/\\n/g, '\n') }
 }
 
+/** Whether anything at all can send. Per-domain readiness is in lib/domains.ts. */
 export const isConfigured = () => credentials() !== null
 
 const b64url = (input: string | Buffer) =>
@@ -82,10 +92,11 @@ export async function deliver(
   to: string,
   subject: string,
   body: string,
+  credentialKey?: string | null,
 ): Promise<Delivery> {
   if (await isSuppressed(to)) throw new Error(`refused: ${to} is suppressed`)
 
-  const account = credentials()
+  const account = credentials(credentialKey)
   if (!account) {
     // No credentials configured: record what would have been sent and move on.
     return { messageIdHeader: `<dry-run.${crypto.randomUUID()}@qatalyst.local>`, dryRun: true }
