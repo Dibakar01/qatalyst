@@ -868,9 +868,19 @@ export default function Letter({
 
       // Written straight to the node. Putting this through React would be a
       // re-render every frame to move one button four pixels.
+      //
+      // Position is written only on the frames it is real. The three screen
+      // objects above are reset to {x: 0, y: 0, on: false} every frame and are
+      // filled in only while the front card is within half a step — so on any
+      // other frame, writing the position moves all three to translate3d(0,0),
+      // the canvas's top-left corner. Only opacity is transitioned, so they
+      // arrived there instantly and faded from the wrong place. Holding the
+      // last good position lets each one fade out where it actually stood.
       const node = markEl.current
       if (node) {
-        node.style.transform = `translate3d(${markScreen.x}px, ${markScreen.y}px, 0) translate(-50%, -50%)`
+        if (markScreen.on) {
+          node.style.transform = `translate3d(${markScreen.x}px, ${markScreen.y}px, 0) translate(-50%, -50%)`
+        }
         node.style.opacity = markScreen.on ? '1' : '0'
         node.style.pointerEvents = markScreen.on ? 'auto' : 'none'
       }
@@ -880,24 +890,30 @@ export default function Letter({
       // front of it.
       const action = actionEl.current
       if (action) {
-        action.style.transform = `translate3d(${footScreen.x}px, ${footScreen.y}px, 0) translate(-50%, -50%)`
+        if (footScreen.on) {
+          action.style.transform = `translate3d(${footScreen.x}px, ${footScreen.y}px, 0) translate(-50%, -50%)`
+        }
         action.style.opacity = footScreen.on ? '1' : '0'
         action.style.pointerEvents = footScreen.on ? 'auto' : 'none'
       }
 
       const label = nameEl.current
       if (label) {
-        label.style.transform = `translate3d(${nameScreen.x}px, ${nameScreen.y}px, 0)`
-        label.style.width = `${nameScreen.w}px`
-        // Tied to the block's own width, so the name grows with the letter.
-        // The floor keeps it legible when the stack stands back; the ceiling
-        // stops it shouting when the letter fills the stage.
-        label.style.fontSize = `${clamp(nameScreen.w * 0.088, 11, 30)}px`
+        if (nameScreen.on) {
+          label.style.transform = `translate3d(${nameScreen.x}px, ${nameScreen.y}px, 0)`
+          label.style.width = `${nameScreen.w}px`
+          // Tied to the block's own width, so the name grows with the letter.
+          // The floor keeps it legible when the stack stands back; the ceiling
+          // stops it shouting when the letter fills the stage.
+          label.style.fontSize = `${clamp(nameScreen.w * 0.088, 11, 30)}px`
+          // The stamp is sized from the same projected width, so it only has a
+          // number to use on the frames the address line was measured. Off
+          // those frames it was falling to its 8px floor and shrinking as it
+          // faded.
+          if (node) node.style.fontSize = `${clamp(nameScreen.w * 0.032, 8, 12)}px`
+        }
         label.style.opacity = nameScreen.on ? '1' : '0'
       }
-
-      const stamp = markEl.current
-      if (stamp) stamp.style.fontSize = `${clamp(nameScreen.w * 0.032, 8, 12)}px`
     }
 
     let frame = requestAnimationFrame(function loop(now) {

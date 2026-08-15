@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { Fit } from './fit'
 
 /* ── Stamps ───────────────────────────────────────────────────────────────────
    With two colours the vocabulary has to be small and absolute:
@@ -72,7 +73,13 @@ export function Sheet({
           <h1 className="mt-1.5 truncate text-title font-medium leading-[1.1] tracking-[-0.028em]">
             {title}
           </h1>
-          {note ? <p className="mt-1 text-dim">{note}</p> : null}
+          {/* Always rendered, empty or not. Only four of the twelve surfaces
+            carry a note, and its line is the difference between a header 90px
+            tall and one 114px tall — so the content under it started 24px
+            higher or lower depending on which panel you opened, which is most
+            of what "the placements keep changing" was. An empty line costs
+            20px and buys every surface opening in the same place. */}
+        <p className="mt-1 min-h-5 text-dim">{note}</p>
         </div>
 
         <div className="flex shrink-0 items-center gap-3">
@@ -100,15 +107,21 @@ export function Sheet({
  * Rows, and never more than fit.
  *
  * Nothing on this desk scrolls. A list that is longer than the space is paged,
- * not scrolled — which means the page size has to be a decision rather than a
- * consequence, and the row height below is that decision.
+ * not scrolled — which means the page size has to be however many rows fit, and
+ * it used to be a hard-coded twelve. Twelve needs about 771px of viewport once
+ * everything around it has taken its share, and a 13" laptop has about 760: so
+ * the last row was drawn under an `overflow-hidden` that had no scrollbar to
+ * admit it, and the pager went on counting it. Ticking a checkbox opened the
+ * bulk strip and quietly ate another one.
+ *
+ * `Fit` measures the real box and a real row and reports back, so the page size
+ * is a consequence of the space after all. It keeps a quiet scroll underneath —
+ * not because anything should reach it, but because a wrong measurement should
+ * cost a scrollbar rather than a row nobody knows is missing.
  */
 export function Ledger({ children }: { children: React.ReactNode }) {
-  return <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+  return <Fit>{children}</Fit>
 }
-
-/** How many rows fit a panel. A page size is a decision, so it is written down. */
-export const ROWS = 12
 
 /**
  * The franking bars, in HTML.

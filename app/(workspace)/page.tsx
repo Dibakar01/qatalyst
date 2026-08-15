@@ -1,5 +1,6 @@
 import { count, desc, sql as raw } from 'drizzle-orm'
 import Link from 'next/link'
+import { cookies } from 'next/headers'
 import { ViewTransition } from 'react'
 import { db } from '@/db'
 import { consentStatus, emailStatus, mailboxes, suppressions } from '@/db/schema'
@@ -32,6 +33,7 @@ import { LIMITS } from '@/lib/rules'
 import { isConfigured } from '@/lib/gmail'
 import { frankingCode, nextAction, shouldHalt, warmupCap, type Next } from '@/lib/rules'
 import { mailboxStats } from '@/lib/send'
+import { ROWS_COOKIE, readRows } from '@/lib/rows'
 import { SLOT } from '@/lib/template'
 import {
   addSource,
@@ -77,7 +79,6 @@ import {
   Ledger,
   Pager,
   quiet,
-  ROWS,
   small,
   ruled,
   Sheet,
@@ -107,6 +108,16 @@ import {
 const BOOK_VIEWS = new Set([
   'book', 'boxes', 'returned', 'sent', 'replies', 'sources', 'reports', 'settings',
 ])
+
+/**
+ * How many rows this window fits, as `Fit` measured it on the last render.
+ *
+ * Absent on a first visit, and the default is then the number that fits the
+ * smallest window the desk supports — so the first paint is a row or two short
+ * rather than a row or two clipped. Every list uses this, so a page really is
+ * a page.
+ */
+const pageSize = async () => readRows((await cookies()).get(ROWS_COOKIE)?.value)
 
 /** The four things you do to a letter, in the order you do them. */
 const STEPS = ['Write', 'Who', 'Review', 'Send'] as const
@@ -1021,7 +1032,7 @@ async function LetterSheet({
         )}
 
         {clause === 2 && (
-          <div className="flex h-full flex-col gap-5">
+          <div className="flex h-full min-h-0 flex-col gap-5">
             <div className="flex items-baseline gap-4">
               <p className="text-display font-medium leading-none">{audience}</p>
               <p className="min-w-0 flex-1 text-dim">
@@ -1045,7 +1056,7 @@ async function LetterSheet({
         {clause === 3 && <Reading queue={queue} at={at} tally={tally} id={id} href={step3} />}
 
         {clause === 4 && (
-          <div className="flex h-full flex-col gap-5">
+          <div className="flex h-full min-h-0 flex-col gap-5">
             <div className="flex items-baseline gap-6">
               {(
                 [
@@ -1277,7 +1288,7 @@ async function BookSheet({ sp }: { sp: Params }) {
   const q = one(sp.q).trim()
   const status = one(sp.status)
   const consent = one(sp.consent)
-  const list = await listContacts({ q, status, consent, page: num(sp.page), size: ROWS })
+  const list = await listContacts({ q, status, consent, page: num(sp.page), size: await pageSize() })
   const filtered = Boolean(q || status || consent)
 
   return (
@@ -1491,7 +1502,7 @@ const when = (d: Date | null) =>
   d ? d.toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'
 
 async function SentSheet({ q, page }: { q: string; page: number }) {
-  const log = await sentLog({ q, page, size: ROWS })
+  const log = await sentLog({ q, page, size: await pageSize() })
   const href = (n: number) => `/?view=sent&page=${n}${q ? `&q=${encodeURIComponent(q)}` : ''}`
 
   return (
@@ -2100,7 +2111,7 @@ function SourcesSheet() {
  * that caused it when there was one.
  */
 async function RepliesSheet({ page }: { page: number }) {
-  const log = await listEnquiries({ page, size: ROWS })
+  const log = await listEnquiries({ page, size: await pageSize() })
 
   return (
     <Sheet
@@ -2383,16 +2394,17 @@ async function BoxesSheet({ boxes }: { boxes: Box[] }) {
 }
 
 async function ReturnedSheet({ page }: { page: number }) {
+  const size = await pageSize()
   const [blocks, [{ total }]] = await Promise.all([
     db
       .select()
       .from(suppressions)
       .orderBy(desc(suppressions.createdAt))
-      .limit(ROWS)
-      .offset((page - 1) * ROWS),
+      .limit(size)
+      .offset((page - 1) * size),
     db.select({ total: count() }).from(suppressions),
   ])
-  const pages = Math.max(Math.ceil(total / ROWS), 1)
+  const pages = Math.max(Math.ceil(total / size), 1)
 
   return (
     <Sheet

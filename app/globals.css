@@ -122,6 +122,11 @@ body {
   letter-spacing: -0.006em;
   -webkit-font-smoothing: antialiased;
   font-variant-numeric: tabular-nums;
+  /* An address, a domain and a URL are each a single unbreakable token, and
+     this desk is made of them. Without this they run straight out of whatever
+     box they are in — the bleed, in one word. It only acts when a word truly
+     cannot fit, so ordinary prose is untouched. */
+  overflow-wrap: break-word;
 }
 
 ::selection {
@@ -201,6 +206,10 @@ body {
   border-radius: 2px;
   white-space: nowrap;
   line-height: 1.4;
+  /* Outline alone left the stamp see-through against a translucent panel and
+     against the letter behind it, which read as unfinished. A status is a
+     thing set down on the surface, so it gets a surface of its own. */
+  background: var(--color-raise);
 }
 
 :focus-visible {
@@ -215,6 +224,14 @@ body {
    what was asked to go, not the ability to see the end of a sentence. */
 .quiet-scroll {
   overflow-y: auto;
+  /* Setting only one axis makes the other compute to `auto`, and the rule
+     below then hides its scrollbar — so anything too wide went off the right
+     edge with no bar to reach it and no sign it had happened. Vertical only. */
+  overflow-x: hidden;
+  /* A scroll box in a flex column has `min-height: auto`, which grows to the
+     content instead of scrolling. Every call site was adding `min-h-0` by
+     hand; one of them forgetting is a silent clip. */
+  min-height: 0;
   scrollbar-width: none;
 }
 
@@ -259,10 +276,14 @@ select option {
 
    Materialise rather than fade — blur and scale move together, so the surface
    reads as a material forming instead of a picture becoming opaque. */
-::view-transition-old(.screen) {
+/* `*.screen`, not `.screen`. The argument grammar is a name selector followed
+   by optional classes, so the name is not optional — a bare class made both of
+   these rules a parse error and the browser dropped them. They had never once
+   run, which is why panels appeared rather than arrived. */
+::view-transition-old(*.screen) {
   animation: 140ms cubic-bezier(1, 0, 0.68, 0.28) both panel-out;
 }
-::view-transition-new(.screen) {
+::view-transition-new(*.screen) {
   animation: 320ms cubic-bezier(0.32, 0.72, 0, 1) both panel-settle;
 }
 
@@ -307,8 +328,8 @@ select option {
 @media (prefers-reduced-motion: reduce) {
   /* Not "no feedback" — a gentler, non-vestibular equivalent. The surface
      still tells you it changed; it just does not travel or blur to do it. */
-  ::view-transition-old(.screen),
-  ::view-transition-new(.screen) {
+  ::view-transition-old(*.screen),
+  ::view-transition-new(*.screen) {
     animation-duration: 160ms !important;
     animation-timing-function: ease !important;
   }

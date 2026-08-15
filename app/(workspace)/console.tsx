@@ -407,7 +407,19 @@ export function Valve({ boxes }: { boxes: Box[] }) {
   const cap = live.reduce((total, box) => total + box.cap, 0)
   const sentToday = boxes.reduce((total, box) => total + box.sentToday, 0)
 
-  if (minute === null) return <div className="h-[132px] animate-pulse rounded-[4px] bg-raise" />
+  // The same three blocks the real thing is made of, at the same sizes. A flat
+  // 132px box was shorter than what replaced it, so the whole panel jumped once
+  // on hydration — and the chart's height depends on the panel's width, so no
+  // single number could have been right. The aspect ratio is the svg's viewBox,
+  // which makes the placeholder exactly the right height at any width.
+  if (minute === null)
+    return (
+      <div className="animate-pulse" aria-hidden>
+        <div className="h-[30px] w-28 rounded-[4px] bg-raise" />
+        <div className="mt-2 w-full rounded-[4px] bg-raise" style={{ aspectRatio: `${SPAN} / 116` }} />
+        <div className="mt-1 h-5 w-3/4 rounded-[4px] bg-raise" />
+      </div>
+    )
 
   const owed = owedNow(boxes, minute)
   const before = minute < WINDOW.start

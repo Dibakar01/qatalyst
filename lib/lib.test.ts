@@ -1409,3 +1409,41 @@ test('a mailbox halts above 3% bounces, but not on a tiny sample', () => {
   assert.equal(shouldHalt(96, 4), true)
   assert.equal(shouldHalt(1000, 0), false)
 })
+
+const { rowsFor, readRows, FLOOR, CEILING, ROWS } = await import('./rows.ts')
+
+test('a page holds the rows that fit, and never a fraction of one', () => {
+  // 11.9 rows of room is 11 rows of list. Rounding up is what put half a row
+  // under the pager and called it a page.
+  assert.equal(rowsFor(440, 37), 11)
+  assert.equal(rowsFor(444, 37), 12, 'an exact fit keeps the last one')
+  assert.equal(rowsFor(443, 37), 11, 'one pixel short loses it')
+})
+
+test('an unmeasurable box falls back rather than paging to nothing', () => {
+  // Both arguments come from the DOM. An empty list has no row to measure and
+  // a box that has not been laid out has no height, and `Number(null)` is 0 —
+  // which floor-divides to 0 rows and a list that can never show anything.
+  assert.equal(rowsFor(0, 37), ROWS, 'no box yet')
+  assert.equal(rowsFor(440, 0), ROWS, 'no row to measure')
+  assert.equal(rowsFor(Number(null), Number(undefined)), ROWS)
+  assert.equal(rowsFor(-100, 37), ROWS, 'a negative height is not a short one')
+})
+
+test('the fit is bounded at both ends', () => {
+  assert.equal(rowsFor(60, 37), FLOOR, 'a tiny window still gets a usable list')
+  assert.equal(rowsFor(40_000, 37), CEILING, 'a wall display does not get 1,081 rows')
+})
+
+test('a page size off the wire is treated as a stranger typed it', () => {
+  // It arrives in a cookie, so it is editable by anyone with devtools. A huge
+  // one is a free full-table scan against the database.
+  assert.equal(readRows('11'), 11)
+  assert.equal(readRows('99999'), ROWS, 'past the ceiling')
+  assert.equal(readRows('0'), ROWS)
+  assert.equal(readRows('-5'), ROWS)
+  assert.equal(readRows('8.5'), ROWS, 'a page size is a whole number of rows')
+  assert.equal(readRows('; drop table contacts'), ROWS)
+  assert.equal(readRows(undefined), ROWS, 'nobody has measured anything yet')
+  assert.equal(readRows(''), ROWS, 'empty is not zero')
+})
