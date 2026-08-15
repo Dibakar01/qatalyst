@@ -51,17 +51,70 @@ export function isBounce(headers: Headers) {
 }
 
 /**
- * A hard bounce is permanent; a soft one is not.
+ * What the mail system actually said, per RFC 3464.
  *
- * It matters because the two deserve opposite treatment: a permanent failure
- * should suppress the address so we never write again, and a full mailbox
- * should not. Treating every bounce as permanent throws away good contacts;
- * treating none as permanent is how a list rots and a domain follows it.
+ * A delivery status notification is a `multipart/report` whose middle part is
+ * `message/delivery-status` — a machine-readable block of `field: value` lines
+ * that states the verdict outright. This reads that block.
+ *
+ * Everything else here used to guess from the subject line and Gmail's snippet
+ * preview, which is a human-readable summary that happens to often contain a
+ * status code. The authoritative answer was never even downloaded.
+ *
+ *   Final-Recipient: rfc822; ada@example.com
+ *   Action: failed
+ *   Status: 5.1.1
+ *   Diagnostic-Code: smtp; 550 5.1.1 No such user
+ *
+ * Written against the RFC rather than taken from a library: the one clean
+ * reference implementation, artack/delivery-status-notification, was archived
+ * in January 2026, and the format has not changed since 2003.
  */
-export function isHardBounce(text: string) {
-  // 5.x.x is permanent, 4.x.x is temporary — RFC 3463 enhanced status codes.
-  const status = text.match(/\b([45])\.\d{1,3}\.\d{1,3}\b/)
-  if (status) return status[1] === '5'
+export type Report = {
+  /** failed is permanent-ish, delayed is explicitly not. */
+  action?: string
+  /** The enhanced status code: 5.x.x permanent, 4.x.x temporary (RFC 3463). */
+  status?: string
+  recipient?: string
+  diagnostic?: string
+}
+
+export function readReport(part: string): Report {
+  // Long values fold onto continuation lines beginning with whitespace.
+  const unfolded = part.replace(/\r?\n[ \t]+/g, ' ')
+  const field = (name: string) =>
+    unfolded.match(new RegExp(`^${name}\\s*:\\s*(.+)$`, 'im'))?.[1]?.trim()
+
+  return {
+    action: field('Action')?.toLowerCase(),
+    status: field('Status'),
+    // `rfc822; someone@example.com` — the type prefix is not the address.
+    recipient: field('Final-Recipient')?.split(';').pop()?.trim(),
+    diagnostic: field('Diagnostic-Code'),
+  }
+}
+
+/**
+ * Permanent, or worth trying again?
+ *
+ * The two deserve opposite treatment, and getting it wrong is expensive in
+ * both directions: read a full mailbox as permanent and a good contact is
+ * suppressed forever; read a dead address as temporary and we keep writing to
+ * it and damage the domain.
+ *
+ * The report is believed when there is one. `delayed` is never permanent —
+ * it explicitly means the server has not given up — and that check comes first
+ * because a delay notice can still carry a 5.x.x code for one recipient of
+ * many.
+ */
+export function isHardBounce(text: string, report?: Report) {
+  if (report?.action === 'delayed') return false
+  if (report?.action === 'delivered' || report?.action === 'relayed') return false
+
+  const code = report?.status ?? text.match(/\b([45])\.\d{1,3}\.\d{1,3}\b/)?.[0]
+  if (code) return code.trim().startsWith('5')
+
+  if (report?.action === 'failed') return true
   return /user unknown|no such user|does not exist|address rejected|mailbox unavailable/i.test(text)
 }
 
@@ -84,7 +137,7 @@ export function isAutoReply(headers: Headers) {
 }
 
 export type Verdict =
-  | { kind: 'bounce'; answering: string[]; hard: boolean }
+  | { kind: 'bounce'; answering: string[]; hard: boolean; report?: Report }
   | { kind: 'reply'; answering: string[] }
   | { kind: 'auto'; answering: string[] }
   | { kind: 'ignore' }
@@ -96,10 +149,15 @@ export type Verdict =
  * notification *is* a reply to our message by threading, and reading it as
  * engagement would be exactly backwards.
  */
-export function classify(headers: Headers, body = ''): Verdict {
+export function classify(headers: Headers, body = '', report?: Report): Verdict {
   const answering = answers(headers)
   if (isBounce(headers)) {
-    return { kind: 'bounce', answering, hard: isHardBounce(`${header(headers, 'subject') ?? ''} ${body}`) }
+    return {
+      kind: 'bounce',
+      answering,
+      hard: isHardBounce(`${header(headers, 'subject') ?? ''} ${body}`, report),
+      report,
+    }
   }
   // Only mail that answers something of ours is ours to interpret.
   if (answering.length === 0) return { kind: 'ignore' }

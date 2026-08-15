@@ -33,8 +33,10 @@ export function proxy(req: NextRequest) {
   return NextResponse.next()
 }
 
-// The brand mark has to be reachable without a session, or the sign-in page
-// has no favicon — the browser asks for it before anyone has logged in.
+// The mark has to be reachable without a session, or the sign-in page has no
+// favicon — the browser asks for it before anyone has logged in, and a redirect
+// to /login is not an image. `apple-icon` is unanchored because Next serves it
+// from a generated route with a hash in the path.
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|icon\\.png|apple-icon\\.png|mark\\.png).*)'],
+  matcher: ['/((?!_next/static|_next/image|icon\\.svg|apple-icon).*)'],
 }

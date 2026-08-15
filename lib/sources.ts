@@ -5,6 +5,7 @@ import { apolloEnrich, apolloPull, apolloReady, PRESETS, type Ready } from './co
 import { runImport } from './contacts.ts'
 import { asEmailStatus } from './csv.ts'
 import { normalise } from './email.ts'
+import { verifierConfigured, verifyMany } from './verify.ts'
 
 /**
  * Running the sources.
@@ -107,6 +108,43 @@ const BATCH = 10
  * would, so an unrecognised value falls back to `unverified` — the never-send
  * default. A vendor's new spelling can never quietly promote an address.
  */
+/**
+ * Check the unverified against our own verifier.
+ *
+ * Free, unlimited and offline in the sense that matters — the list never
+ * leaves our machine. Preferred over the paid path, and used first: anything
+ * it can settle is a record we do not pay to enrich.
+ */
+export async function verifyUnverified(limit = BATCH) {
+  if (!verifierConfigured()) throw new Error('No verifier. Set REACHER_URL — see docker-compose.yml.')
+
+  const waiting = await db
+    .select({ id: contacts.id, email: contacts.email })
+    .from(contacts)
+    .where(
+      and(
+        eq(contacts.emailStatus, 'unverified'),
+        isNotNull(contacts.email),
+        isNull(contacts.erasedAt),
+      ),
+    )
+    .limit(Math.min(limit, BATCH))
+
+  if (waiting.length === 0) return 'nothing was waiting to be checked'
+
+  const byEmail = new Map(waiting.map((c) => [normalise(c.email!), c.id]))
+  const { checked, changed } = await verifyMany(
+    waiting.map((c) => c.email!),
+    async (email, emailStatus) => {
+      const id = byEmail.get(normalise(email))
+      if (id) await db.update(contacts).set({ emailStatus }).where(eq(contacts.id, id))
+    },
+  )
+
+  const stuck = checked - changed
+  return `checked ${checked}, settled ${changed}${stuck > 0 ? `, ${stuck} still unknown` : ''}`
+}
+
 export async function enrichUnverified(limit = BATCH) {
   const ready = apolloReady()
   if (!ready.ok) throw new Error(ready.why)

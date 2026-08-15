@@ -17,7 +17,8 @@
     "db:demo": "node --env-file-if-exists=.env scripts/demo.ts",
     "token": "node --env-file-if-exists=.env scripts/token.ts",
     "send": "node --env-file-if-exists=.env scripts/send.ts",
-    "load": "node --env-file-if-exists=.env scripts/load.ts"
+    "load": "node --env-file-if-exists=.env scripts/load.ts",
+    "estate": "node --env-file-if-exists=.env scripts/estate.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",

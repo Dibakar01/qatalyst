@@ -1,4 +1,4 @@
-import { count, desc } from 'drizzle-orm'
+import { count, desc, sql as raw } from 'drizzle-orm'
 import Link from 'next/link'
 import { ViewTransition } from 'react'
 import { db } from '@/db'
@@ -48,6 +48,7 @@ import {
   runSourceAction,
   saveCampaignAction,
   applyAdvice,
+  addSendingDomain,
   saveSettings,
   togglePractice,
   saveStatus,
@@ -2147,6 +2148,15 @@ async function BoxesSheet({ boxes }: { boxes: Box[] }) {
   const allowed = ready.reduce((t, d) => t + d.todayCap, 0)
   const sendable = ready.filter((d) => d.connected).reduce((t, d) => t + d.todayCap, 0)
 
+  // What the estate reaches once every domain is through its ramp, held to the
+  // domain ceiling — because a domain's own limit binds before its mailboxes'
+  // do once there are more than a few boxes on it.
+  const mailboxCount = boxes.length
+  const atFull = ready.reduce((t, d) => t + d.fullCap, 0)
+  const [{ waiting }] = await db.execute<{ waiting: number }>(
+    raw`select count(*)::int waiting from messages where status = 'approved'`,
+  )
+
   return (
     <Sheet
       label="Sending"
@@ -2167,6 +2177,64 @@ async function BoxesSheet({ boxes }: { boxes: Box[] }) {
             <Valve boxes={boxes} />
           </div>
         )}
+
+        {/* How long the queue will actually take.
+            Throughput is bounded by the estate, not the software: 30–50 a day
+            per mailbox and about 250 per domain is what keeps mail landing, so
+            going faster means more boxes rather than bigger caps. Nothing in
+            the app said how long anything would take until this. */}
+        <div className="flex flex-wrap items-baseline gap-x-8 gap-y-3 border-b border-line px-6 py-5">
+          <span>
+            <span className="text-display font-medium leading-none tabular-nums">{sendable}</span>
+            <span className="pl-2 text-dim">a day, now</span>
+          </span>
+          <span>
+            <span className="text-title font-medium leading-none tabular-nums text-dim">{atFull}</span>
+            <span className="pl-2 text-dim">once warm</span>
+          </span>
+          {waiting > 0 && (
+            <span className="text-dim">
+              {waiting.toLocaleString()} approved and waiting —{' '}
+              <span className="text-ink">
+                {sendable > 0
+                  ? `about ${Math.ceil(waiting / sendable)} ${Math.ceil(waiting / sendable) === 1 ? 'day' : 'days'}`
+                  : 'nothing is going out'}
+              </span>
+            </span>
+          )}
+          <span className="ml-auto text-dim">
+            {mailboxCount} {mailboxCount === 1 ? 'mailbox' : 'mailboxes'} · {domains.length}{' '}
+            {domains.length === 1 ? 'domain' : 'domains'}
+          </span>
+        </div>
+
+        {/* Buy a domain, put a few boxes on it, warm it. That is the whole
+            motion, so it is one form. */}
+        <details className="border-b border-line">
+          <summary className="cursor-pointer list-none px-6 py-3 text-primary">
+            + Add a sending domain
+          </summary>
+          <form action={addSendingDomain} className="flex flex-wrap items-end gap-3 px-6 pb-5">
+            <label className="flex min-w-[13rem] flex-1 flex-col gap-2">
+              <Label>Domain</Label>
+              <input name="domain" placeholder="qalakaar-mail.com" required className={ruled} />
+            </label>
+            <label className="flex min-w-[15rem] flex-[2] flex-col gap-2">
+              <Label>Mailboxes on it</Label>
+              <input name="prefixes" placeholder="dibakar, hello, team" required className={ruled} />
+              <span className="text-dim">Names before the @, separated by commas.</span>
+            </label>
+            <label className="flex w-24 flex-col gap-2">
+              <Label>Each/day</Label>
+              <input name="cap" type="number" defaultValue={40} min={5} max={50} className={ruled} />
+            </label>
+            <label className="flex w-28 flex-col gap-2">
+              <Label>Domain/day</Label>
+              <input name="domain_cap" type="number" defaultValue={250} min={20} max={500} className={ruled} />
+            </label>
+            <button className={go}>Add</button>
+          </form>
+        </details>
 
         {domains.map((domain) => {
           const mine = boxes.filter((box) => box.email.endsWith(`@${domain.name}`))

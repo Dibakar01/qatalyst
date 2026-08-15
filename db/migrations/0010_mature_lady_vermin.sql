@@ -1,0 +1,1 @@
+ALTER TABLE "domains" ADD COLUMN "daily_cap" integer DEFAULT 250 NOT NULL;

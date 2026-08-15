@@ -1,0 +1,35 @@
+# The open-source email verifier, run on our own machine.
+#
+#   docker compose up -d
+#   REACHER_URL=http://localhost:8080   # then set this in .env
+#
+# Reacher connects to each recipient's mail server and asks whether the address
+# exists, without delivering anything — so unverified contacts stop being dead
+# weight, and no list ever leaves our infrastructure.
+#
+# https://github.com/reacherhq/check-if-email-exists
+#
+# IT NEEDS OUTBOUND PORT 25. Google Cloud blocks that permanently and will not
+# lift it; AWS only on request; Hetzner and OVH leave it open by default, and
+# most home ISPs do not. Run this on a small VPS with port 25 open rather than
+# on a laptop, or every answer comes back `unknown`.
+#
+# Licence: dual commercial / AGPL-3.0. It runs as its own service that we call
+# over HTTP, which keeps the boundary clean — worth confirming properly if
+# Qatalyst is ever offered to anyone outside the agency.
+services:
+  reacher:
+    image: reacherhq/backend:latest
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:8080:8080'
+    environment:
+      RUST_LOG: info
+      # The address Reacher introduces itself as. It should resolve, and its
+      # host should have a matching reverse DNS record, or fussier receivers
+      # will refuse to answer.
+      RCH_FROM_EMAIL: ${REACHER_FROM_EMAIL:-verify@example.com}
+      RCH_HELLO_NAME: ${REACHER_HELLO_NAME:-example.com}
+      # Bound to localhost above, so this is defence in depth rather than the
+      # only lock.
+      RCH_HEADER_SECRET: ${REACHER_SECRET:-}

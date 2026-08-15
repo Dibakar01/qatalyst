@@ -1,8 +1,10 @@
-import { and, eq, inArray, isNotNull, sql as raw } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull, sql as raw } from 'drizzle-orm'
 import { db } from '../db/index.ts'
-import { contacts, events, mailboxes, messages } from '../db/schema.ts'
-import { tokenFor } from './gmail.ts'
-import { classify, type Headers } from './replies.ts'
+import { contacts, events, mailboxes, messages, warmups } from '../db/schema.ts'
+import { deliver, tokenFor } from './gmail.ts'
+import { answers, classify, header, isBounce, readReport, type Headers } from './replies.ts'
+import { reply } from './warmup.ts'
+import { tuning } from './settings.ts'
 import { suppress } from './suppression.ts'
 
 /**
@@ -45,6 +47,41 @@ async function fetchJson(url: string, token: string) {
   return response.json()
 }
 
+/**
+ * The machine-readable part of a delivery notification, if there is one.
+ *
+ * Fetched only for messages that already look like a bounce — the metadata
+ * pass above stays cheap, and a full fetch is several times the payload. Walks
+ * the MIME tree because the report can be nested inside the `multipart/report`
+ * rather than sitting at the top level.
+ */
+async function deliveryReport(id: string, token: string) {
+  const full = (await fetchJson(`${LIST}/${id}?format=full`, token)) as {
+    payload?: MimePart
+  }
+
+  const find = (part?: MimePart): string | null => {
+    if (!part) return null
+    if (part.mimeType === 'message/delivery-status' && part.body?.data) {
+      return Buffer.from(part.body.data, 'base64url').toString('utf8')
+    }
+    for (const child of part.parts ?? []) {
+      const found = find(child)
+      if (found) return found
+    }
+    return null
+  }
+
+  const block = find(full.payload)
+  return block ? readReport(block) : undefined
+}
+
+type MimePart = {
+  mimeType?: string
+  body?: { data?: string }
+  parts?: MimePart[]
+}
+
 /** Header list → a plain object, which is all the pure code wants. */
 function headersOf(payload: { headers?: { name: string; value: string }[] }): Headers {
   const out: Headers = {}
@@ -82,7 +119,20 @@ export async function readMailbox(
     )) as { payload?: { headers?: { name: string; value: string }[] }; snippet?: string }
 
     result.read++
-    const verdict = classify(headersOf(full.payload ?? {}), full.snippet ?? '')
+    const headers = headersOf(full.payload ?? {})
+
+    // Our own warm-up mail, arriving. Answering it is what turns a delivery
+    // into a conversation, and a conversation is the signal a young domain
+    // actually needs — a one-way send proves only that we can send.
+    const answered = await answerWarmup(headers, mailbox, result)
+    if (answered) continue
+
+    // Ask the mail system what it actually said, rather than reading the
+    // subject line and hoping. Only for the ones that look like a bounce, so
+    // the cheap pass stays cheap.
+    const report = isBounce(headers) ? await deliveryReport(id, token).catch(() => undefined) : undefined
+
+    const verdict = classify(headers, full.snippet ?? '', report)
     if (verdict.kind === 'ignore' || verdict.answering.length === 0) continue
 
     // Which of our sends this answers. The Message-ID is unique, so this is a
@@ -108,7 +158,13 @@ export async function readMailbox(
         contactId: ours.contactId,
         messageId: ours.id,
         type: 'bounce',
-        payload: { hard: verdict.hard, mailbox: mailbox.email },
+        // What the server said, kept verbatim: a wrong verdict suppresses a
+        // real person forever, so the evidence has to be readable afterwards.
+        payload: {
+          hard: verdict.hard,
+          mailbox: mailbox.email,
+          ...(verdict.report ?? {}),
+        },
       })
 
       // A permanent failure means never write to this address again. A
@@ -150,6 +206,55 @@ export async function readMailbox(
     result.detail.push(`${mailbox.email}: reply`)
   }
 }
+
+/**
+ * Answer a warm-up message from one of our own mailboxes.
+ *
+ * Matched on the Message-ID we recorded when it was sent, so this can never
+ * mistake a real prospect's mail for warm-up traffic — the row has to exist and
+ * be unanswered.
+ */
+async function answerWarmup(
+  headers: Headers,
+  mailbox: { id: string; email: string },
+  result: Result,
+) {
+  const threaded = answers(headers)
+  if (threaded.length === 0) return false
+
+  const [warm] = await db
+    .select()
+    .from(warmups)
+    .where(
+      and(
+        inArray(warmups.messageIdHeader, threaded),
+        eq(warmups.toMailbox, mailbox.email),
+        isNull(warmups.repliedAt),
+      ),
+    )
+    .limit(1)
+  if (!warm) return false
+
+  // Reply from the mailbox that received it, on its own domain's credential.
+  const [own] = await db
+    .select({ credentialKey: raw<string | null>`(select d.credential_key from domains d where d.id = ${mailboxes.domainId})` })
+    .from(mailboxes)
+    .where(eq(mailboxes.id, mailbox.id))
+    .limit(1)
+
+  const { subject, body } = reply(header(headers, 'subject') ?? 'Quick one')
+  try {
+    await deliver(mailbox.email, warm.fromMailbox, subject, body, own?.credentialKey, await inPractice())
+    await db.update(warmups).set({ repliedAt: new Date() }).where(eq(warmups.id, warm.id))
+    result.detail.push(`${mailbox.email} -> ${warm.fromMailbox} (warm reply)`)
+  } catch {
+    // Never let warm-up stop the read pass.
+  }
+  return true
+}
+
+/** Read once per pass rather than per message. */
+const inPractice = async () => (await tuning()).practice
 
 /** Every active mailbox, once. Called from the worker beside the send tick. */
 export async function readTick(): Promise<Result> {

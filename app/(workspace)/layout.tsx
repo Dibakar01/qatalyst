@@ -1,5 +1,5 @@
-import Image from 'next/image'
 import Link from 'next/link'
+import Mark from '../mark'
 import { requireAuth } from '@/lib/auth'
 import ThemeSwitch from '../theme'
 import { signOut } from './actions'
@@ -17,9 +17,13 @@ export default async function DeskLayout({ children }: LayoutProps<'/'>) {
   return (
     <div className="flex h-dvh flex-col">
       <header className="chrome relative z-20 flex shrink-0 items-center justify-center px-6 py-3">
-        <Link href="/" className="flex items-center gap-2">
-          <Image src="/mark.png" alt="" width={18} height={18} priority className="rounded-[3px]" />
-          <span className="font-semibold tracking-[-0.04em]">qatalyst</span>
+        {/* The name sits in the corner where names go; the mark stands alone in
+            the middle. They were stuck together in the centre, which made the
+            wordmark do the icon's job and left this corner empty. */}
+        <span className="absolute left-6 font-semibold tracking-[-0.04em] text-dim">qatalyst</span>
+
+        <Link href="/" aria-label="qatalyst — the desk" className="flex items-center">
+          <Mark size={20} />
         </Link>
         <div className="absolute right-6 flex items-center gap-3">
           <ThemeSwitch />

@@ -239,9 +239,148 @@ test('practice survives a save, and is only ever a boolean', () => {
   assert.equal(clampTuning({ practice: 'no' }, SAFE).practice, false)
 })
 
+/* warming a domain ---------------------------------------------------------- */
+
+const { pairs, stillWarming, note, reply, RAMP_DAYS } = await import('./warmup.ts')
+
+const estate = [
+  { email: 'a1@one.com', domainId: 'd1' },
+  { email: 'a2@one.com', domainId: 'd1' },
+  { email: 'b1@two.com', domainId: 'd2' },
+  { email: 'b2@two.com', domainId: 'd2' },
+  { email: 'c1@three.com', domainId: 'd3' },
+]
+
+test('a domain never warms itself', () => {
+  // The same infrastructure vouching for itself is the weakest possible
+  // signal, and an obvious pattern besides.
+  const by = new Map(estate.map((b) => [b.email, b.domainId]))
+  for (const round of [0, 1, 2, 3, 7]) {
+    for (const { from, to } of pairs(estate, round)) {
+      assert.notEqual(by.get(from), by.get(to), `${from} → ${to} shares a domain`)
+      assert.notEqual(from, to)
+    }
+  }
+})
+
+test('pairing falls back to the address when a mailbox has no domain row', () => {
+  // A mailbox not yet attached must still not warm itself.
+  const loose = [
+    { email: 'x@same.com', domainId: null },
+    { email: 'y@same.com', domainId: null },
+  ]
+  assert.deepEqual(pairs(loose), [], 'nothing to pair with across domains')
+
+  const mixed = [...loose, { email: 'z@other.com', domainId: null }]
+  for (const { from, to } of pairs(mixed)) {
+    assert.notEqual(from.split('@')[1], to.split('@')[1])
+  }
+})
+
+test('pairings vary between rounds rather than looping forever', () => {
+  const first = JSON.stringify(pairs(estate, 0))
+  const later = [1, 2, 3].map((r) => JSON.stringify(pairs(estate, r)))
+  assert.ok(later.some((p) => p !== first), 'the same two must not correspond forever')
+})
+
+test('nothing pairs when there is nowhere to write', () => {
+  assert.deepEqual(pairs([]), [])
+  assert.deepEqual(pairs([{ email: 'only@one.com', domainId: 'd1' }]), [])
+})
+
+test('warming stops at the end of the ramp', () => {
+  assert.equal(stillWarming(0), true)
+  assert.equal(stillWarming(RAMP_DAYS), true)
+  assert.equal(stillWarming(RAMP_DAYS + 1), false, 'not background traffic forever')
+  // Null means established, and an established domain is not warmed.
+  assert.equal(stillWarming(null), false)
+})
+
+test('warm-up mail reads as a person, not as outreach', () => {
+  const { subject, body } = note('a1@one.com', 'b1@two.com')
+  assert.ok(subject.length > 0 && body.length > 0)
+  // No links: a spam filter looking at a new domain's first mail should see
+  // correspondence, not something that resembles the campaign itself.
+  assert.doesNotMatch(body, /https?:\/\//)
+  assert.doesNotMatch(subject, /https?:\/\//)
+  // Stable for a given pairing, so a thread stays coherent.
+  assert.deepEqual(note('a1@one.com', 'b1@two.com'), { subject, body })
+
+  assert.equal(reply('Quick one').subject, 'Re: Quick one')
+  assert.equal(reply('Re: Quick one').subject, 'Re: Quick one', 'never Re: Re:')
+})
+
+/* verifying an address ------------------------------------------------------ */
+
+const { statusFor } = await import('./verify.ts')
+
+test("the verifier's answer maps onto our own statuses", () => {
+  assert.equal(statusFor({ is_reachable: 'safe' }), 'verified')
+  assert.equal(statusFor({ is_reachable: 'invalid' }), 'invalid')
+
+  // A catch-all accepts everything, so acceptance proves nothing — and we have
+  // a status for exactly that, with its own daily cap.
+  assert.equal(statusFor({ is_reachable: 'risky', smtp: { is_catch_all: true } }), 'catch_all')
+
+  // Risky for a reason that will not improve.
+  assert.equal(statusFor({ is_reachable: 'risky', smtp: { is_disabled: true } }), 'invalid')
+  assert.equal(statusFor({ is_reachable: 'risky', misc: { is_disposable: true } }), 'invalid')
+})
+
+test('unknown never becomes invalid', () => {
+  // The usual cause is a server that would not talk to us, which says nothing
+  // about whether the person exists. Reading silence as proof of absence would
+  // suppress good contacts permanently, and suppression does not come back.
+  assert.equal(statusFor({ is_reachable: 'unknown' }), null)
+  assert.equal(statusFor({}), null)
+  assert.equal(statusFor({ smtp: { is_catch_all: true } }), null)
+})
+
+/* the domain's own ceiling -------------------------------------------------- */
+
+const { domainAllowance, clampDomainCap, DOMAIN_CAP, DOMAIN_CAP_LIMITS } = await import('./rules.ts')
+
+test('a domain runs out even while its mailboxes have allowance left', () => {
+  // The whole point. Per-mailbox caps do not protect a domain: five mailboxes
+  // at 50 and eight at 50 look identical to a mailbox and very different to
+  // Google, and the reputation that burns belongs to the domain.
+  assert.equal(domainAllowance(DOMAIN_CAP, 0), 250)
+  assert.equal(domainAllowance(DOMAIN_CAP, 249), 1)
+  assert.equal(domainAllowance(DOMAIN_CAP, 250), 0, 'spent for the day')
+  // Overshoot cannot become negative allowance, which would read as "send more".
+  assert.equal(domainAllowance(DOMAIN_CAP, 400), 0)
+})
+
+test('eight mailboxes at 50 cannot take a domain to 400', () => {
+  // Walk a day the way the sender does: each mailbox asks, the domain answers.
+  const cap = DOMAIN_CAP
+  let sent = 0
+  for (let round = 0; round < 8; round++) {
+    for (let box = 0; box < 8; box++) {
+      const left = domainAllowance(cap, sent)
+      // Each mailbox would happily send 50 of its own.
+      sent += Math.min(50, left)
+    }
+  }
+  assert.equal(sent, 250, 'the domain holds at its ceiling however many boxes push')
+})
+
+test('the domain cap is clamped, so no setting can burn the domain', () => {
+  assert.equal(clampDomainCap(300), 300)
+  assert.equal(clampDomainCap(9999), DOMAIN_CAP_LIMITS[1])
+  assert.equal(clampDomainCap(0), DOMAIN_CAP_LIMITS[0])
+  assert.equal(clampDomainCap(-5), DOMAIN_CAP_LIMITS[0])
+  // Anything unparseable falls back to the safe default rather than to zero,
+  // which would silently stop all sending.
+  assert.equal(clampDomainCap('abc'), DOMAIN_CAP)
+  assert.equal(clampDomainCap(null), DOMAIN_CAP)
+  assert.equal(clampDomainCap(undefined), DOMAIN_CAP)
+})
+
 /* reading the post that comes back ----------------------------------------- */
 
-const { answers, classify, isAutoReply, isBounce, isHardBounce } = await import('./replies.ts')
+const { answers, classify, isAutoReply, isBounce, isHardBounce, readReport } =
+  await import('./replies.ts')
 const { afterFailure, MAX_ATTEMPTS } = await import('./rules.ts')
 
 test('a reply is matched even when it is deep in a thread', () => {
@@ -267,6 +406,52 @@ test('a bounce is recognised however it is dressed', () => {
   assert.ok(isBounce({ Subject: 'Undeliverable: A quick question' }))
   assert.ok(isBounce({ Subject: 'Delivery Status Notification (Failure)' }))
   assert.ok(!isBounce({ From: 'ada@example.com', Subject: 'Re: A quick question' }))
+})
+
+test('the delivery report is read, not guessed at', () => {
+  // A real message/delivery-status block, as Gmail sends it.
+  const block = [
+    'Reporting-MTA: dns; googlemail.com',
+    '',
+    'Final-Recipient: rfc822; ada@example.com',
+    'Action: failed',
+    'Status: 5.1.1',
+    'Diagnostic-Code: smtp; 550 5.1.1 The email account that you tried to',
+    ' reach does not exist.',
+  ].join('\r\n')
+
+  const report = readReport(block)
+  assert.equal(report.action, 'failed')
+  assert.equal(report.status, '5.1.1')
+  // `rfc822; ada@example.com` — the type prefix is not part of the address.
+  assert.equal(report.recipient, 'ada@example.com')
+  // Folded onto a continuation line, and must come back as one value.
+  assert.match(report.diagnostic ?? '', /does not exist\.$/)
+})
+
+test('the report beats the subject line when they disagree', () => {
+  // This is the whole reason for reading it. A "Delivery delayed" notice can
+  // carry a 5.x.x code for one recipient of several — believing the code alone
+  // would suppress somebody whose mail is still being retried.
+  const delayed = readReport('Action: delayed\r\nStatus: 4.7.0')
+  assert.equal(isHardBounce('Undeliverable: 550 no such user', delayed), false)
+
+  // And the other way: a bland subject with a permanent code underneath.
+  const failed = readReport('Action: failed\r\nStatus: 5.1.1')
+  assert.equal(isHardBounce('Delivery Status Notification', failed), true)
+
+  // With no report at all it still falls back to reading the text, so nothing
+  // regresses for servers that send a plain human rejection.
+  assert.equal(isHardBounce('550 5.1.1 user unknown'), true)
+  assert.equal(isHardBounce('452 4.2.2 mailbox full'), false)
+})
+
+test('a delivery report with no status is not read as permanent', () => {
+  // `delivered` and `relayed` are successes that still arrive as reports.
+  assert.equal(isHardBounce('', readReport('Action: delivered')), false)
+  assert.equal(isHardBounce('', readReport('Action: relayed')), false)
+  // Nothing useful at all: fall back to the text, which here says nothing.
+  assert.equal(isHardBounce('', readReport('Reporting-MTA: dns; x.com')), false)
 })
 
 test('permanent and temporary bounces are told apart', () => {

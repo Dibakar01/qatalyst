@@ -2,7 +2,7 @@ import { asc, eq } from 'drizzle-orm'
 import { db } from '../db/index.ts'
 import { domains, mailboxes, type Domain } from '../db/schema.ts'
 import { domainOf } from './email.ts'
-import { daysSince, warmupCap } from './rules.ts'
+import { clampDomainCap, daysSince, warmupCap } from './rules.ts'
 
 /**
  * The sending domains, and their credentials.
@@ -54,6 +54,8 @@ export type DomainView = Domain & {
   mailboxes: number
   /** What the domain may send today across its mailboxes, after warm-up. */
   todayCap: number
+  /** Where it settles once the ramp is finished. */
+  fullCap: number
 }
 
 export async function listDomains(now = new Date()): Promise<DomainView[]> {
@@ -69,9 +71,18 @@ export async function listDomains(now = new Date()): Promise<DomainView[]> {
       connected: isConnected(domain.credentialKey),
       expects: envName(domain.credentialKey ?? defaultKey(domain.name)),
       mailboxes: mine.length,
-      todayCap: mine
-        .filter((box) => box.active)
-        .reduce((total, box) => total + warmupCap(box.dailyCap, day), 0),
+      // Held to the domain's own ceiling, because the sender holds it there.
+      // Summing mailbox caps alone would promise 320 a day from eight boxes at
+      // 40 while the sender stops at 250 — a readout that disagrees with the
+      // rule is worse than no readout.
+      todayCap: Math.min(
+        mine.filter((box) => box.active).reduce((t, box) => t + warmupCap(box.dailyCap, day), 0),
+        domain.dailyCap,
+      ),
+      fullCap: Math.min(
+        mine.filter((box) => box.active).reduce((t, box) => t + box.dailyCap, 0),
+        domain.dailyCap,
+      ),
     }
   })
 }
@@ -120,3 +131,69 @@ export const setWarming = (id: string, warmingSince: Date | null) =>
 
 export const setDomainActive = (id: string, active: boolean) =>
   db.update(domains).set({ active }).where(eq(domains.id, id))
+
+/**
+ * Add a sending domain and the mailboxes on it, in one go.
+ *
+ * Until now `mailboxes` was written only by the seed and acceptance scripts —
+ * so growing the estate meant editing the database by hand, which is the real
+ * reason throughput was stuck. You buy them a domain at a time with a handful
+ * of boxes on it, so that is the shape of this.
+ *
+ * The warm-up clock starts now: a new domain sends 5 a day and compounds to
+ * full cap over about three weeks, whatever caps are asked for here.
+ */
+export async function addDomain(input: {
+  name: string
+  /** Local parts — `hello` becomes `hello@the-domain`. */
+  prefixes: string[]
+  /** Per mailbox. The domain's own ceiling is separate. */
+  cap?: number
+  /** Anything; clampDomainCap decides what it means. */
+  domainCap?: unknown
+  credentialKey?: string | null
+}) {
+  const name = input.name.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '')
+  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(name)) {
+    throw new Error(`"${input.name}" is not a domain name.`)
+  }
+
+  const [domain] = await db
+    .insert(domains)
+    .values({
+      name,
+      credentialKey: input.credentialKey || envName(name),
+      dailyCap: clampDomainCap(input.domainCap),
+      // Assume it is new, because it usually is. Warming can be cleared by
+      // hand for a domain that has been sending for years.
+      warmingSince: new Date(),
+    })
+    .onConflictDoUpdate({ target: domains.name, set: { dailyCap: clampDomainCap(input.domainCap) } })
+    .returning()
+
+  // 30–50 a day each is the published safe range; anything outside it is a
+  // typo or a bad idea, and either way not what the estate should run on.
+  const cap = Math.min(Math.max(Math.round(Number(input.cap) || 40), 5), 50)
+
+  const wanted = input.prefixes
+    .flatMap((p) => p.split(/[,\s]+/))
+    .map((p) => p.trim().toLowerCase().replace(/@.*$/, ''))
+    .filter(Boolean)
+
+  if (wanted.length === 0) return { domain, added: 0 }
+
+  const rows = await db
+    .insert(mailboxes)
+    .values(
+      [...new Set(wanted)].map((prefix) => ({
+        email: `${prefix}@${name}`,
+        domainId: domain.id,
+        dailyCap: cap,
+        active: true,
+      })),
+    )
+    .onConflictDoNothing()
+    .returning()
+
+  return { domain, added: rows.length }
+}

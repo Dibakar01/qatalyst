@@ -219,6 +219,15 @@ export const domains = pgTable('domains', {
    * mailbox caps stand as configured.
    */
   warmingSince: timestamp('warming_since', { withTimezone: true }),
+  /**
+   * What the whole domain may send in a day, across every mailbox on it.
+   *
+   * Separate from the per-mailbox cap, and the one that protects the asset:
+   * five mailboxes at 50 puts a domain at 250, eight puts it at 400, and the
+   * reputation that burns belongs to the domain rather than to any one box.
+   * Published guidance settles around 250; the clamp keeps it near there.
+   */
+  dailyCap: integer('daily_cap').notNull().default(250),
   active: boolean('active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 })
@@ -371,6 +380,32 @@ export const conversions = pgTable(
   ],
 )
 
+/**
+ * Mail our own mailboxes send each other, to earn a new domain its reputation.
+ *
+ * Deliberately not in `messages`. Warm-up mail has no contact and no campaign,
+ * and every report counts rows in that table — so a warm-up send living there
+ * would appear as a send no prospect ever received, and quietly corrupt the
+ * reply and click rates the whole system is judged on.
+ */
+export const warmups = pgTable(
+  'warmups',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    fromMailbox: text('from_mailbox').notNull(),
+    toMailbox: text('to_mailbox').notNull(),
+    /** What Gmail assigned it, so the reply can be threaded onto it. */
+    messageIdHeader: text('message_id_header'),
+    sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
+    /** When the other side answered. An unanswered send is a weaker signal. */
+    repliedAt: timestamp('replied_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('warmups_message_id_idx').on(t.messageIdHeader),
+    index('warmups_to_idx').on(t.toMailbox, t.repliedAt),
+  ],
+)
+
 export type Contact = typeof contacts.$inferSelect
 export type NewContact = typeof contacts.$inferInsert
 export type Campaign = typeof campaigns.$inferSelect
@@ -379,5 +414,6 @@ export type Mailbox = typeof mailboxes.$inferSelect
 export type Connector = typeof connectors.$inferSelect
 export type Enquiry = typeof enquiries.$inferSelect
 export type Conversion = typeof conversions.$inferSelect
+export type Warmup = typeof warmups.$inferSelect
 export type Settings = typeof settings.$inferSelect
 export type Domain = typeof domains.$inferSelect

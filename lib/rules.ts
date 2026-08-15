@@ -172,6 +172,42 @@ export function nextAction(
   return { label: tally.sent > 0 ? 'all posted' : 'nobody to write to', action: 'none', count: 0 }
 }
 
+/* ── the domain's own ceiling ─────────────────────────────────────────────── */
+
+/**
+ * Published guidance for how much one domain may send in a day.
+ *
+ * Per-mailbox caps alone do not protect anything: reputation is earned and
+ * lost by the domain, so five mailboxes at 50 and eight at 50 look identical
+ * to a mailbox and very different to Google. 30–50 a mailbox and about 250 a
+ * domain is where the guidance settles.
+ */
+export const DOMAIN_CAP = 250
+
+/** Nothing outside this, whatever anyone types. */
+export const DOMAIN_CAP_LIMITS = [20, 500] as const
+
+export const clampDomainCap = (n: unknown) => {
+  // Number(null) is 0 and Number('') is 0 — both would clamp to the lowest
+  // bound and look deliberate. Missing means the safe default, not the most
+  // restrictive value. Exactly the trap clampTuning already guards against.
+  if (n === null || n === undefined || n === '') return DOMAIN_CAP
+  const raw = Number(n)
+  if (!Number.isFinite(raw)) return DOMAIN_CAP
+  return Math.min(Math.max(Math.round(raw), DOMAIN_CAP_LIMITS[0]), DOMAIN_CAP_LIMITS[1])
+}
+
+/**
+ * What this domain has left today, across every mailbox on it.
+ *
+ * Sits on top of the per-mailbox allowance rather than replacing it: a mailbox
+ * may still have personal allowance while its domain is spent, and in that
+ * case nothing goes out. The whole point is that the tighter of the two wins.
+ */
+export function domainAllowance(cap: number, sentToday: number) {
+  return Math.max(cap - sentToday, 0)
+}
+
 /* ── when a send fails ────────────────────────────────────────────────────── */
 
 /** Tries before a message is given up on and handed back to a person. */

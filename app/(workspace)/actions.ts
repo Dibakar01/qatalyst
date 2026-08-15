@@ -29,7 +29,7 @@ import { generateForCampaign } from '@/lib/generate'
 import { KINDS, shape, type Kind } from '@/lib/compose'
 import { batchSize, nextAction } from '@/lib/rules'
 import { sendTick } from '@/lib/send'
-import { setDomainActive, setWarming } from '@/lib/domains'
+import { addDomain, setDomainActive, setWarming } from '@/lib/domains'
 import { moveStage, tag, type Stage } from '@/lib/segments'
 import { fromClock, saveTuning, tuning } from '@/lib/settings'
 import {
@@ -347,6 +347,34 @@ export async function togglePractice() {
   const now = await tuning()
   await saveTuning({ practice: !now.practice })
   refresh()
+}
+
+/**
+ * Add a sending domain and its mailboxes.
+ *
+ * The estate is the only safe lever on throughput — 30–50 a day per mailbox
+ * and ~250 per domain is the published ceiling, so going faster means more
+ * boxes, not bigger caps. Until this existed there was no way to add either.
+ */
+export async function addSendingDomain(formData: FormData) {
+  await requireAuth()
+  let said = ''
+  try {
+    const { domain, added } = await addDomain({
+      name: field(formData, 'domain'),
+      prefixes: [field(formData, 'prefixes')],
+      cap: Number(field(formData, 'cap')) || 40,
+      domainCap: field(formData, 'domain_cap'),
+    })
+    said =
+      added > 0
+        ? `${domain.name}: ${added} ${added === 1 ? 'mailbox' : 'mailboxes'}, warming from today.`
+        : `${domain.name} added, but no new mailboxes — they may already exist.`
+  } catch (cause) {
+    said = cause instanceof Error ? cause.message : 'Could not add that.'
+  }
+  refresh()
+  redirect(`/?view=boxes&said=${encodeURIComponent(said)}`)
 }
 
 /* settings ---------------------------------------------------------------- */

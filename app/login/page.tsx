@@ -1,9 +1,9 @@
 import { cookies } from 'next/headers'
-import Image from 'next/image'
 import { redirect } from 'next/navigation'
 import { COOKIE, cookieValue, passwordMatches } from '@/lib/auth'
 import Letter from '../letter'
 import ThemeSwitch from '../theme'
+import Mark from '../mark'
 
 /**
  * The same room, before you have been let into it. The letter is on the stage
@@ -29,7 +29,7 @@ export default async function Login({ searchParams }: PageProps<'/login'>) {
     <div className="flex h-dvh flex-col">
       <header className="relative flex shrink-0 items-center justify-center px-3 py-2">
         <span className="flex items-center gap-2">
-          <Image src="/mark.png" alt="" width={18} height={18} priority className="rounded-[3px]" />
+          <Mark size={18} />
           <span className="font-semibold tracking-[-0.04em]">qatalyst</span>
         </span>
         <div className="absolute right-4">
@@ -40,7 +40,7 @@ export default async function Login({ searchParams }: PageProps<'/login'>) {
       <div className="min-h-0 flex-1 px-3 pb-3">
         <div className="stage grain relative flex h-full items-center gap-4 overflow-hidden rounded-[18px] p-4">
           <form action={login} className="panel w-[min(21rem,100%)] shrink-0 rounded-[10px] p-7">
-            <Image src="/mark.png" alt="" width={28} height={28} className="mb-5 rounded-[4px]" />
+            <span className="mb-5 block"><Mark size={28} /></span>
             <p className="text-micro font-medium uppercase tracking-[0.16em] text-dim">Internal</p>
             <h1 className="mt-2 text-title font-medium leading-tight tracking-[-0.03em]">
               Who&rsquo;s writing?

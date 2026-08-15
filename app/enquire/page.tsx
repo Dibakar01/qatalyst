@@ -1,10 +1,10 @@
 import { eq } from 'drizzle-orm'
-import Image from 'next/image'
 import { redirect } from 'next/navigation'
 import { db } from '@/db'
 import { contacts } from '@/db/schema'
 import { recordEnquiry } from '@/lib/funnel'
 import { readLink } from '@/lib/token'
+import Mark from '../mark'
 
 /**
  * The far end of the funnel, and the only page here a stranger ever sees.
@@ -46,7 +46,7 @@ export default async function Enquire({ searchParams }: PageProps<'/enquire'>) {
   return (
     <main className="mx-auto flex min-h-dvh max-w-xl flex-col justify-center gap-6 px-6 py-16">
       <div className="flex items-center gap-3">
-        <Image src="/mark.png" alt="" width={28} height={28} priority className="rounded-[4px]" />
+        <Mark size={28} />
         <span className="font-semibold tracking-[-0.04em]">qatalyst</span>
       </div>
 
