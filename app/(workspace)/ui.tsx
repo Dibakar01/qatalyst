@@ -311,6 +311,19 @@ export const stop =
 export const field =
   'w-full rounded-[4px] border border-line bg-raise px-3 py-2 transition-colors placeholder:text-dim/70 focus:border-primary'
 
-/** A line ruled under an entry, rather than a box drawn around it. */
+/**
+ * A line ruled under an entry, rather than a box drawn around it.
+ *
+ * No width. It used to carry `w-full`, and six call sites tried to narrow it
+ * with `w-40`, `w-32`, `w-24` and so on — every one of them lost, because two
+ * utilities for the same property are settled by their order in the stylesheet
+ * and not by the order they are written in the attribute. So the bulk strip
+ * came out as four full-width rows stacked 210px tall instead of one, and the
+ * new-letter name, the destination and the block-domain row all spanned their
+ * surface. A width is the call site's business; this is a look.
+ *
+ * The stacked forms need no replacement: their labels are flex columns, which
+ * stretch a child to the full width on their own.
+ */
 export const ruled =
-  'w-full border-0 border-b border-line bg-transparent px-0 py-2 transition-colors placeholder:text-dim/70 focus:border-primary'
+  'border-0 border-b border-line bg-transparent px-0 py-2 transition-colors placeholder:text-dim/70 focus:border-primary'

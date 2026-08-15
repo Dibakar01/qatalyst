@@ -186,12 +186,9 @@ body {
   backdrop-filter: blur(22px) saturate(105%);
 }
 
-/* A scroll edge, not a hard divider: content fades where it passes under
-   floating chrome rather than being cut by a line. */
-.edge-top {
-  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 18px);
-  mask-image: linear-gradient(to bottom, transparent, #000 18px);
-}
+/* This was `.edge-top`, written for exactly this and then never used on
+   anything. The idea was right and the placement was wrong: the edge that
+   needs it is the bottom one. */
 
 /* ── Stamps ─────────────────────────────────────────────────────────────────
    A status is a mark struck onto the page, not a badge with a rounded fill.
@@ -224,6 +221,19 @@ body {
    what was asked to go, not the ability to see the end of a sentence. */
 .quiet-scroll {
   overflow-y: auto;
+  /* The bottom edge fades instead of cutting.
+
+     These panels hide their scrollbar, so a surface with more below it ended
+     mid-sentence against a hard rounded edge — "risky addresses a day, per"
+     and then nothing. That reads as broken, not as continuing, and it is most
+     of what "the elements are bleeding" was pointing at.
+
+     Always on, because a panel's own 24px of inner padding sits inside this
+     box: when the content fits, the gradient falls across empty padding and
+     cannot be seen. It only shows itself when there is something underneath
+     to fade, which is the only time it should. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
   /* Setting only one axis makes the other compute to `auto`, and the rule
      below then hides its scrollbar — so anything too wide went off the right
      edge with no bar to reach it and no sign it had happened. Vertical only. */
