@@ -52,6 +52,33 @@ export async function audienceSize(campaignId: string) {
   return row.total
 }
 
+/**
+ * The same number, for every letter, in one round trip.
+ *
+ * Each audience has its own filter so this cannot collapse into a GROUP BY,
+ * but it can collapse into one query — and round trips are what the desk was
+ * actually paying for: two per letter, six letters, on every navigation.
+ */
+export async function audienceSizes(
+  list: { id: string; audienceSegments: string[] | null; audienceStages: string[] | null }[],
+) {
+  if (list.length === 0) return new Map<string, number>()
+
+  const parts = list.map(
+    (c) => raw`select ${c.id}::uuid as id, count(*)::int as n from contacts where ${and(
+      audienceWhere(c.audienceSegments ?? [], c.audienceStages ?? []),
+      isNotNull(contacts.email),
+      notInArray(
+        contacts.id,
+        db.select({ id: messages.contactId }).from(messages).where(eq(messages.campaignId, c.id)),
+      ),
+    )}`,
+  )
+
+  const rows = await db.execute<{ id: string; n: number }>(raw.join(parts, raw` union all `))
+  return new Map(rows.map((r) => [r.id, Number(r.n)]))
+}
+
 export async function createCampaign(name: string) {
   const [row] = await db
     .insert(campaigns)

@@ -204,6 +204,87 @@ test('a typed batch size can never run away with the model budget', () => {
   assert.equal(batchSize('500'), 100, 'the ceiling holds however big the ask')
 })
 
+/* how sure are we, actually ------------------------------------------------ */
+
+const { interval, separates, winner, sendsNeeded, readable } = await import('./stats.ts')
+
+test('the Wilson interval matches values worked out by hand', () => {
+  // 1 of 10 is the standard textbook example: 0.0179 to 0.4042.
+  const small = interval(1, 10)
+  assert.ok(Math.abs(small.low - 0.0179) < 0.001, `low was ${small.low}`)
+  assert.ok(Math.abs(small.high - 0.4042) < 0.001, `high was ${small.high}`)
+
+  // 15 of 20, worked through by hand:
+  //   p̂ 0.75 · denom 1.19207 · centre 0.70973 · spread 0.17842
+  const bigger = interval(15, 20)
+  assert.ok(Math.abs(bigger.low - 0.5313) < 0.001, `low was ${bigger.low}`)
+  assert.ok(Math.abs(bigger.high - 0.8882) < 0.001, `high was ${bigger.high}`)
+})
+
+test('an interval is always a probability, even at the extremes', () => {
+  // This is why Wilson and not the normal approximation: at these rates the
+  // textbook formula returns a negative lower bound, which is not a thing.
+  for (const [k, n] of [[0, 0], [0, 1], [1, 1], [0, 40], [40, 40], [1, 750]] as const) {
+    const i = interval(k, n)
+    assert.ok(i.low >= 0 && i.low <= 1, `low out of range at ${k}/${n}: ${i.low}`)
+    assert.ok(i.high >= 0 && i.high <= 1, `high out of range at ${k}/${n}: ${i.high}`)
+    assert.ok(i.low <= i.high, `inverted at ${k}/${n}`)
+  }
+  // Nothing observed is not the same as nothing happening.
+  assert.ok(interval(0, 40).high > 0.05, '0 of 40 is not "0%"')
+  assert.equal(interval(0, 0).high, 1, 'no data means anything is possible')
+})
+
+test('the interval narrows as evidence arrives', () => {
+  const early = interval(1, 40)
+  const later = interval(19, 750)
+  assert.ok(early.high - early.low > later.high - later.low)
+  // And the honest reading of one click in forty is a range, not "2.5%".
+  assert.ok(readable(early).includes('–'), `should be a range, was ${readable(early)}`)
+  assert.ok(!readable(interval(300, 10_000)).includes('–'), 'tight enough to state plainly')
+})
+
+test('no winner is declared on the sample the old code accepted', () => {
+  // The exact case that used to fire: 40 sends, one better than the other.
+  // At a 3% base rate this is indistinguishable from luck.
+  const a = interval(2, 40)
+  const b = interval(0, 40)
+  assert.equal(separates(a, b), false)
+  assert.equal(winner(a, b), null, 'this is what the old ENOUGH = 40 was calling a winner')
+})
+
+test('a winner is declared once the evidence is really there', () => {
+  // 8% against 4% at 750 each — the volume the benchmarks say it takes.
+  const good = interval(60, 750)
+  const poor = interval(30, 750)
+  assert.equal(separates(good, poor), true)
+  assert.equal(winner(good, poor)?.rate, good.rate)
+})
+
+test('how many more sends would settle it', () => {
+  const a = interval(2, 40)
+  const b = interval(1, 40)
+  const need = sendsNeeded(a, b)
+  assert.ok(need !== null && need > 100, `a small gap needs many more, got ${need}`)
+
+  // A wider gap needs fewer.
+  const wide = sendsNeeded(interval(12, 40), interval(1, 40))
+  assert.ok(wide !== null && wide < need!, 'a bigger difference is cheaper to prove')
+
+  // Already conclusive: nothing more required.
+  assert.equal(sendsNeeded(interval(60, 750), interval(30, 750)), 0)
+
+  // Identical rates can never be separated, however long you wait.
+  assert.equal(sendsNeeded(interval(10, 100), interval(20, 200)), null)
+})
+
+test('the published benchmark is reachable, and says so', () => {
+  // 3% vs 6% — the doubling the research says needs ~750 each. Confirm our own
+  // maths lands in that region rather than the 40 the code used to assume.
+  const need = sendsNeeded(interval(3, 100), interval(6, 100))
+  assert.ok(need !== null && need > 400 && need < 1400, `expected several hundred, got ${need}`)
+})
+
 /* what the numbers say to do ----------------------------------------------- */
 
 const { advise, ENOUGH } = await import('./advice.ts')
@@ -238,7 +319,7 @@ test('advice never fires on a sample too small to mean anything', () => {
   assert.ok(!tiny.some((a) => a.title.includes('better than')), 'no winner declared on 4 sends')
   assert.ok(!tiny.some((a) => a.title.includes('best source')), 'no best source on 4 sends')
   assert.ok(!tiny.some((a) => a.title.includes('can be written to')), 'no source judged on 4 contacts')
-  assert.equal(tiny[0].title, 'Too early to tell')
+  assert.equal(tiny[0].title, 'Nothing conclusive yet')
 })
 
 test('a halted mailbox is reported as already handled, not as a task', () => {
@@ -266,30 +347,35 @@ test('a prompt that invents things is caught, once there are enough drafts', () 
   assert.ok(!run({ letters: [letter({ ...bad, written: 4 })] }).some((a) => a.title.includes('inventing')))
 })
 
-test('a winner is only declared on a real difference, not a rounding error', () => {
-  const n = ENOUGH.outcome
-  const clear = run({
+test('a winner needs the volume the benchmarks say it needs', () => {
+  // 4 clicks in 40 against 0 in 40 looks like a landslide and is not: the
+  // intervals still overlap. This exact shape used to declare a winner.
+  const early = run({
     letters: [
-      letter({ id: 'a', name: 'Good', sent: n, clickRate: 0.1, replyRate: 0.02 }),
-      letter({ id: 'b', name: 'Bad', sent: n, clickRate: 0.01, replyRate: 0 }),
+      letter({ id: 'a', name: 'Good', sent: 40, clicked: 4 }),
+      letter({ id: 'b', name: 'Bad', sent: 40, clicked: 0 }),
     ],
   })
-  assert.ok(clear.some((a) => a.title.includes('Good') && a.title.includes('better than')))
+  assert.ok(!early.some((a) => a.title.includes('really is beating')), '40 sends cannot decide')
+  assert.ok(
+    early.some((a) => a.title.includes('not provably') && a.why.includes('more sends')),
+    'and it says how many more would settle it',
+  )
 
-  // Nearly identical: saying one won would be inventing a result.
-  const tie = run({
+  // 8% against 4% at 750 each — the volume the research says it takes.
+  const proven = run({
     letters: [
-      letter({ id: 'a', name: 'A', sent: n, clickRate: 0.05 }),
-      letter({ id: 'b', name: 'B', sent: n, clickRate: 0.045 }),
+      letter({ id: 'a', name: 'Good', sent: 750, clicked: 60 }),
+      letter({ id: 'b', name: 'Bad', sent: 750, clicked: 30 }),
     ],
   })
-  assert.ok(!tie.some((a) => a.title.includes('better than')))
+  assert.ok(proven.some((a) => a.title.includes('Good') && a.title.includes('really is beating')))
 
-  // Two letters that both produced nothing have no winner either.
+  // Two letters that both produced nothing have no winner and no near-miss.
   const dead = run({
-    letters: [letter({ id: 'a', name: 'A', sent: n }), letter({ id: 'b', name: 'B', sent: n })],
+    letters: [letter({ id: 'a', name: 'A', sent: 750 }), letter({ id: 'b', name: 'B', sent: 750 })],
   })
-  assert.ok(!dead.some((a) => a.title.includes('better than')))
+  assert.ok(!dead.some((a) => a.title.includes('beating') || a.title.includes('not provably')))
 })
 
 test('an expensive source is named, and so is a good one', () => {

@@ -24,12 +24,14 @@ import { Fragment, useEffect } from 'react'
  * the same list, and each pill now shows its number.
  */
 const GOES = {
+  // The three you do daily, in the strip.
   '1': '/?as=list',
-  '2': '/?view=book',
-  '3': '/?view=sent',
-  '4': '/?view=replies',
-  '5': '/?view=sources',
-  '6': '/?view=reports',
+  '2': '/?view=replies',
+  '3': '/?view=reports',
+  // Then everything else, in the order the menu lists it.
+  '4': '/?view=book',
+  '5': '/?view=sent',
+  '6': '/?view=sources',
   '7': '/?view=returned',
   '0': '/',
   n: '/?new=1',

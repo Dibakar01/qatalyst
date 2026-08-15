@@ -23,7 +23,9 @@ export function proxy(req: NextRequest) {
 
   // Webhooks cannot carry a session cookie, so the route checks a bearer secret
   // of its own. Private-side only: this writes contacts.
-  if (pathname.startsWith('/api/ingest/')) return NextResponse.next()
+  if (pathname.startsWith('/api/ingest/') || pathname === '/api/conversion') {
+    return NextResponse.next()
+  }
 
   if (pathname === '/login') return NextResponse.next()
   if (!req.cookies.get(COOKIE)) return NextResponse.redirect(new URL('/login', req.url))

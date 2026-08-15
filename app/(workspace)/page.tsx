@@ -5,6 +5,7 @@ import { db } from '@/db'
 import { consentStatus, emailStatus, mailboxes, suppressions } from '@/db/schema'
 import {
   audienceSize,
+  audienceSizes,
   counts,
   getCampaign,
   listCampaigns,
@@ -14,11 +15,12 @@ import {
 } from '@/lib/campaigns'
 import { contactStats, fieldCoverage, getContact, listContacts } from '@/lib/contacts'
 import { KINDS, review, shape } from '@/lib/compose'
-import { enquiryCount, listEnquiries } from '@/lib/funnel'
+import { conversionCounts, enquiryCount, listEnquiries } from '@/lib/funnel'
 import { byLetter, byMailbox, bySource, listHealth } from '@/lib/reports'
 import { asClock, tuning } from '@/lib/settings'
 import { advise } from '@/lib/advice'
-import { attachAll, listDomains } from '@/lib/domains'
+import { interval, readable } from '@/lib/stats'
+import { listDomains } from '@/lib/domains'
 import { audienceOf, listSegments, stageCounts } from '@/lib/segments'
 import { STAGES } from '@/db/schema'
 import { canPull, listSources, PUSH_PRESETS, pushUrl, readiness } from '@/lib/sources'
@@ -143,10 +145,10 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
     enquiryCount(),
   ])
 
-  // ponytail: one count per letter. A handful of cheap counts beats deriving
-  // the audience from the global total, which drifts the moment anyone is
-  // erased or suppressed — and this number decides what the mark offers to do.
-  const audiences = await Promise.all(rows.map((r) => audienceSize(r.campaign.id)))
+  // One query for every letter's audience. This was two per letter on every
+  // navigation, which is what the load test caught.
+  const sizes = await audienceSizes(rows.map((r) => r.campaign))
+  const audiences = rows.map((r) => sizes.get(r.campaign.id) ?? 0)
 
   const boxes: Box[] = await Promise.all(
     boxRows.map(async (box) => {
@@ -239,28 +241,23 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
           <span className="text-dim">nothing needs you</span>
         )}
 
+        {/* Three things you do daily, then everything else one level down.
+            The strip used to give eleven destinations equal weight, so the
+            letters you work every hour sat beside the blocklist you open twice
+            a year. Numbers run 1–7 top to bottom, matching the keys. */}
         <nav className="flex items-center gap-1" aria-label="Where things are">
           {(
             [
               ['/?as=list', 'Letters', rows.length, listed],
-              ['/?view=book', 'Contacts', contacts.total, view === 'book'],
-              ['/?view=sent', 'Sent', gone, view === 'sent'],
               ['/?view=replies', 'Replies', replies, view === 'replies'],
-              ['/?view=sources', 'Sources', null, view === 'sources'],
               ['/?view=reports', 'Reports', null, view === 'reports'],
-              ['/?view=returned', 'Blocked', null, view === 'returned'],
             ] as const
           ).map(([href, label, n, on], index) => (
             <Link
               key={label}
               href={href}
               aria-current={on ? 'page' : undefined}
-              // The key that reaches it, shown on the thing it reaches. A
-              // shortcut you have to be told about is one nobody uses.
               title={`${label} · press ${index + 1}`}
-              // A place you can go should look like something you can press.
-              // Flat text in a row reads as a caption, and a caption does not
-              // invite a click.
               className={`flex items-center gap-2 rounded-full border px-3 py-2 transition-[background-color,border-color,transform] active:scale-[0.97] ${
                 on
                   ? 'border-primary bg-primary text-secondary'
@@ -282,6 +279,42 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
               )}
             </Link>
           ))}
+
+          {/* Native disclosure: no state, no effect, no listener, and it closes
+              itself when something inside is clicked because the page navigates. */}
+          <details className="relative">
+            <summary
+              className={`flex cursor-pointer list-none items-center gap-2 rounded-full border px-3 py-2 transition-colors ${
+                ['book', 'sent', 'sources', 'returned'].includes(view)
+                  ? 'border-primary bg-primary text-secondary'
+                  : 'border-line text-dim hover:border-ink/30 hover:bg-raise hover:text-ink'
+              }`}
+            >
+              Everything else
+              <span className="text-small opacity-50">▾</span>
+            </summary>
+            <div className="panel absolute right-0 top-[calc(100%+6px)] z-30 w-60 overflow-hidden rounded-[8px] border border-line p-1 shadow-lg">
+              {(
+                [
+                  ['/?view=book', 'Contacts', contacts.total, 4],
+                  ['/?view=sent', 'Sent', gone, 5],
+                  ['/?view=sources', 'Sources', null, 6],
+                  ['/?view=returned', 'Blocked', null, 7],
+                ] as const
+              ).map(([href, label, n, key]) => (
+                <Link
+                  key={label}
+                  href={href}
+                  aria-current={href.includes(view) ? 'page' : undefined}
+                  className="flex items-center gap-3 rounded-[5px] px-3 py-2 text-dim transition-colors hover:bg-raise hover:text-ink"
+                >
+                  <span className="w-3 text-small tabular-nums opacity-40">{key}</span>
+                  <span className="flex-1">{label}</span>
+                  {n !== null && <span className="text-small tabular-nums opacity-60">{n.toLocaleString()}</span>}
+                </Link>
+              ))}
+            </div>
+          </details>
         </nav>
 
         <span className="ml-auto flex items-center gap-8">
@@ -1378,6 +1411,7 @@ async function ReportsSheet() {
     listHealth(),
   ])
 
+  const funnel = await conversionCounts()
   const advice = advise({ mailboxes: boxes, sources, letters, tuning: rules })
   const worst = boxes.reduce((a, b) => (b.towardHalt > (a?.towardHalt ?? -1) ? b : a), boxes[0])
   const sent = letters.reduce((t, l) => t + l.sent, 0)
@@ -1445,10 +1479,51 @@ async function ReportsSheet() {
         </div>
 
         {/* ── letters, ranked by what they produced ──────────────────────── */}
+        {/* ── the whole funnel ────────────────────────────────────────────
+            Sent through to subscribed, which is the only row that is money.
+            The last three arrive from your product over /api/conversion. */}
+        <section className="pt-6">
+          <div className="flex items-baseline gap-3 px-6 pb-3">
+            <Label>The funnel</Label>
+            <span className="text-dim">outbound through to paid</span>
+          </div>
+          <div className="flex flex-col gap-1.5 px-6">
+            {(
+              [
+                ['Sent', sent],
+                ['Clicked', clicked],
+                ['Replied', replied],
+                ['Visited', funnel.visited],
+                ['Signed up', funnel.signedUp],
+                ['Subscribed', funnel.subscribed],
+              ] as const
+            ).map(([label, n], i, all) => (
+              <div key={label} className="flex items-center gap-3">
+                <span className="w-20 shrink-0 text-dim">{label}</span>
+                <span className="h-5 min-w-px flex-1">
+                  <span
+                    className={`block h-full rounded-[3px] ${i === all.length - 1 ? 'bg-primary' : 'bg-ink/15'}`}
+                    style={{ width: `${all[0][1] > 0 ? Math.max((n / all[0][1]) * 100, n > 0 ? 1.5 : 0) : 0}%` }}
+                  />
+                </span>
+                <span className="w-14 shrink-0 text-right tabular-nums">{n.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+          {funnel.revenue > 0 && (
+            <p className="px-6 pt-3 text-dim">
+              <span className="text-ink tabular-nums">
+                {(funnel.revenue / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </span>{' '}
+              from {funnel.subscribed} {funnel.subscribed === 1 ? 'subscription' : 'subscriptions'}, attributed to the letter that started it.
+            </p>
+          )}
+        </section>
+
         <section className="pt-6">
           <div className="flex items-baseline gap-3 px-6 pb-2">
             <Label>Letters</Label>
-            <span className="text-dim">by reply rate</span>
+            <span className="text-dim">click or reply, as a range</span>
           </div>
           {[...letters]
             .sort((a, b) => b.replyRate + b.clickRate - (a.replyRate + a.clickRate))
@@ -1463,10 +1538,13 @@ async function ReportsSheet() {
                 )}
 
                 <span className="w-16 shrink-0 text-right tabular-nums text-dim">{letter.sent}</span>
-                <span className="flex w-32 shrink-0 items-center justify-end gap-2">
-                  <Bar value={Math.min((letter.clickRate + letter.replyRate) * 8, 1)} />
-                  <span className="w-12 text-right tabular-nums">
-                    {letter.sent > 0 ? asPercent(letter.clickRate + letter.replyRate) : '—'}
+                {/* The range, not the point. One click in forty is not "2.5%",
+                    it is somewhere between 0.4% and 13%, and showing the first
+                    number is how a fluke gets promoted to a finding. */}
+                <span className="flex w-40 shrink-0 items-center justify-end gap-2">
+                  <Bar value={Math.min(interval(letter.clicked + letter.replied, letter.sent).rate * 8, 1)} />
+                  <span className="w-24 text-right tabular-nums">
+                    {readable(interval(letter.clicked + letter.replied, letter.sent))}
                   </span>
                 </span>
               </Link>
@@ -1845,9 +1923,6 @@ async function RepliesSheet({ page }: { page: number }) {
  * morning for a fortnight.
  */
 async function BoxesSheet({ boxes }: { boxes: Box[] }) {
-  // Any mailbox added before domains existed gets adopted on sight, so nobody
-  // has to name a domain by hand before they can use one.
-  await attachAll()
   const domains = await listDomains()
   // What could go out, and what actually can. Saying only the second reads as
   // broken when the ramp is working fine and a key is simply missing.

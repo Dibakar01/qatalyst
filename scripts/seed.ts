@@ -28,5 +28,11 @@ await db
   })
   .onConflictDoNothing()
 
+// Every mailbox belongs to a domain. Done here rather than on a page render —
+// adopting rows was a write on a read path, which is how a GET starts mutating.
+// Must come before the connection closes.
+const { attachAll } = await import('../lib/domains.ts')
+await attachAll()
+
 await sql.end()
-console.log('seeded')
+console.log('seeded, mailboxes attached to their domains')

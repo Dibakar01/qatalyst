@@ -1,6 +1,6 @@
-import { and, count, desc, eq } from 'drizzle-orm'
+import { and, count, desc, eq, isNotNull, sql as raw } from 'drizzle-orm'
 import { db } from '../db/index.ts'
-import { campaigns, contacts, enquiries, events, messages } from '../db/schema.ts'
+import { campaigns, contacts, conversions, enquiries, events, messages } from '../db/schema.ts'
 import { isValidEmail, normalise } from './email.ts'
 import { advance } from './segments.ts'
 import type { Trace } from './token.ts'
@@ -126,4 +126,88 @@ export async function listEnquiries({ page = 1, size = 12 } = {}) {
     db.select({ total: count() }).from(enquiries),
   ])
   return { rows, total, page: Math.max(page, 1), pages: Math.max(Math.ceil(total / size), 1) }
+}
+
+/* ── conversions ──────────────────────────────────────────────────────────── */
+
+export type ConversionEvent = 'visited' | 'signed_up' | 'subscribed'
+
+/**
+ * The other side reporting back.
+ *
+ * Your product owns signup and billing; it tells us when someone crossed a
+ * line, and we attribute it to the letter that started them off. This is the
+ * server-side conversions model rather than a pixel: it survives ad blockers,
+ * cross-domain navigation, and a subscription that arrives three months after
+ * the email.
+ *
+ * Matching is by address, which is the only durable key across two systems —
+ * and it is why the tracked link carries a token but does not need to: someone
+ * who forwards the email to a colleague who then signs up is attributed to the
+ * colleague, correctly.
+ */
+export async function recordConversion(input: {
+  email: string
+  event: ConversionEvent
+  value?: number | null
+  currency?: string | null
+  at?: Date
+}) {
+  const email = normalise(input.email)
+  if (!isValidEmail(email)) throw new Error('a valid email address is required')
+
+  const [contact] = await db
+    .select({ id: contacts.id })
+    .from(contacts)
+    .where(eq(contacts.email, email))
+    .limit(1)
+
+  // The most recent thing we sent them is what gets the credit. Last-touch,
+  // stated plainly rather than dressed up as a model — with one letter per
+  // person per campaign there is rarely anything to argue about.
+  const [last] = contact
+    ? await db
+        .select({ id: messages.id, campaignId: messages.campaignId })
+        .from(messages)
+        .where(and(eq(messages.contactId, contact.id), isNotNull(messages.sentAt)))
+        .orderBy(desc(messages.sentAt))
+        .limit(1)
+    : []
+
+  const [row] = await db
+    .insert(conversions)
+    .values({
+      contactId: contact?.id ?? null,
+      campaignId: last?.campaignId ?? null,
+      messageId: last?.id ?? null,
+      event: input.event,
+      value: input.value ?? null,
+      currency: input.currency ?? null,
+      ...(input.at ? { createdAt: input.at } : {}),
+    })
+    // At-least-once delivery is the norm for webhooks, so a retry must not
+    // invoice us twice. The unique index does the work.
+    .onConflictDoNothing()
+    .returning()
+
+  // Paying is the strongest signal the pipeline can get, and the machine
+  // should not need a person to type it in.
+  if (contact && input.event === 'subscribed') await advance(contact.id, 'customer')
+
+  return { recorded: Boolean(row), attributed: Boolean(last), contact: Boolean(contact) }
+}
+
+/** The funnel, end to end, for the reports. */
+export async function conversionCounts() {
+  const rows = await db.execute<{ event: string; n: number; value: number | null }>(raw`
+    select event::text as event, count(*)::int as n, sum(coalesce(value, 0))::int as value
+    from conversions group by 1
+  `)
+  const by = new Map(rows.map((r) => [r.event, r]))
+  return {
+    visited: Number(by.get('visited')?.n ?? 0),
+    signedUp: Number(by.get('signed_up')?.n ?? 0),
+    subscribed: Number(by.get('subscribed')?.n ?? 0),
+    revenue: Number(by.get('subscribed')?.value ?? 0),
+  }
 }

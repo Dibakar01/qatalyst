@@ -43,6 +43,15 @@ export const eventType = pgEnum('event_type', [
   'enquiry',
 ])
 
+/**
+ * What happened on the other side, after the click.
+ *
+ * Your product owns signup and billing and posts these back — the same shape
+ * as an ad platform's server-side conversions API. No pixel, no cross-domain
+ * cookie, and it still works when somebody subscribes three months later.
+ */
+export const conversionEvent = pgEnum('conversion_event', ['visited', 'signed_up', 'subscribed'])
+
 /** Where contacts come from. Each is a source Qatalyst can be pointed at. */
 export const connectorKind = pgEnum('connector_kind', ['csv', 'apollo', 'linkedin'])
 
@@ -314,6 +323,35 @@ export const enquiries = pgTable(
   (t) => [index('enquiries_campaign_idx').on(t.campaignId)],
 )
 
+/**
+ * Someone got far enough to matter.
+ *
+ * Unique on (contact, event) so a retried webhook cannot count a subscription
+ * twice — a delivery guarantee is normally at-least-once, and revenue that
+ * double-counts is worse than revenue that is late.
+ *
+ * `value` is in minor units, which is what turns "which source is worth
+ * paying for" from a count into an answer.
+ */
+export const conversions = pgTable(
+  'conversions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    contactId: uuid('contact_id').references(() => contacts.id, { onDelete: 'set null' }),
+    campaignId: uuid('campaign_id').references(() => campaigns.id, { onDelete: 'set null' }),
+    messageId: uuid('message_id').references(() => messages.id, { onDelete: 'set null' }),
+    event: conversionEvent('event').notNull(),
+    /** Minor units — pence, paise, cents. Null when the step carries no money. */
+    value: integer('value'),
+    currency: text('currency'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('conversions_contact_event_key').on(t.contactId, t.event),
+    index('conversions_campaign_idx').on(t.campaignId),
+  ],
+)
+
 export type Contact = typeof contacts.$inferSelect
 export type NewContact = typeof contacts.$inferInsert
 export type Campaign = typeof campaigns.$inferSelect
@@ -321,5 +359,6 @@ export type Message = typeof messages.$inferSelect
 export type Mailbox = typeof mailboxes.$inferSelect
 export type Connector = typeof connectors.$inferSelect
 export type Enquiry = typeof enquiries.$inferSelect
+export type Conversion = typeof conversions.$inferSelect
 export type Settings = typeof settings.$inferSelect
 export type Domain = typeof domains.$inferSelect

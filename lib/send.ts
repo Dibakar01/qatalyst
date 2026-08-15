@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, sql as raw } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull, sql as raw } from 'drizzle-orm'
 import { db } from '../db/index.ts'
 import { campaigns, contacts, domains, events, mailboxes, messages } from '../db/schema.ts'
 import { deliver, isConfigured } from './gmail.ts'
@@ -31,6 +31,44 @@ export type MailboxStats = {
  * screen. One definition, so what you are looking at is exactly what the sender
  * will act on rather than a second opinion that drifts.
  */
+/**
+ * Every mailbox's counters in one query.
+ *
+ * `mailboxStats` used to be called once per mailbox inside the send loop — four
+ * mailboxes meant four round trips a minute, and it grew with the estate. The
+ * numbers are the same; they now arrive together.
+ */
+export async function allMailboxStats(now = new Date()): Promise<Map<string, MailboxStats>> {
+  const rows = await db
+    .select({
+      mailboxId: messages.mailboxId,
+      sentToday: raw<number>`count(*) filter (
+        where ${messages.sentAt}::date = ${localDay(now)}::date and ${messages.status} = 'sent'
+      )`.mapWith(Number),
+      catchAllToday: raw<number>`count(*) filter (
+        where ${messages.sentAt}::date = ${localDay(now)}::date
+          and ${messages.status} = 'sent'
+          and ${contacts.emailStatus} = 'catch_all'
+      )`.mapWith(Number),
+      sentEver: raw<number>`count(*) filter (where ${messages.status} = 'sent')`.mapWith(Number),
+      bouncedEver: raw<number>`count(*) filter (where ${messages.status} = 'bounced')`.mapWith(Number),
+    })
+    .from(messages)
+    .innerJoin(contacts, eq(contacts.id, messages.contactId))
+    .where(isNotNull(messages.mailboxId))
+    .groupBy(messages.mailboxId)
+
+  return new Map(rows.map((r) => [r.mailboxId!, r]))
+}
+
+/** A mailbox that has never sent has zeroes, not a missing row. */
+export const NO_STATS: MailboxStats = {
+  sentToday: 0,
+  catchAllToday: 0,
+  sentEver: 0,
+  bouncedEver: 0,
+}
+
 export async function mailboxStats(mailboxId: string, now = new Date()): Promise<MailboxStats> {
   const [row] = await db
     .select({
@@ -73,13 +111,15 @@ export async function sendTick(now = new Date()): Promise<TickResult> {
   // through a pass or two mailboxes would be judged by different lines.
   const rules = await tuning()
   const suppressed = await suppressionIndex()
+  // One query for every mailbox's counters, rather than one per mailbox.
+  const stats = await allMailboxStats(now)
 
   for (const { mailbox, domain } of boxes) {
     // A domain paused by hand stops every mailbox on it at once — which is the
     // point of grouping them: one bad domain does not take the others down.
     if (domain && !domain.active) continue
 
-    const counts = await mailboxStats(mailbox.id, now)
+    const counts = stats.get(mailbox.id) ?? NO_STATS
 
     if (shouldHalt(counts.sentEver, counts.bouncedEver, rules)) {
       // Halt only the campaigns that actually sent through this mailbox.

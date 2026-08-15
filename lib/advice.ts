@@ -1,5 +1,6 @@
 import type { LetterRow, MailboxRow, SourceRow } from './reports.ts'
 import type { Tuning } from './rules.ts'
+import { interval, readable, sendsNeeded, separates } from './stats.ts'
 
 /**
  * What the numbers are telling you to do.
@@ -27,13 +28,23 @@ export type Advice = {
   fix?: { label: string; href: string }
 }
 
-/** Below these, a rate is noise and no advice is offered at all. */
+/**
+ * The floors that remain, and why only these.
+ *
+ * Rates are no longer judged against a constant — `lib/stats.ts` decides
+ * whether two of them are actually different. These are only the point below
+ * which it is not worth doing the arithmetic at all.
+ *
+ * The old `ENOUGH.outcome = 40` claimed forty sends could pick a winner. At the
+ * published 3.4% median reply rate it takes around 750 per variant, so that
+ * number was wrong by nearly twenty times and every winner it called was noise.
+ */
 export const ENOUGH = {
-  /** Sends before a click or reply rate means anything. */
-  outcome: 40,
-  /** Drafts before a flag rate means anything. */
+  /** Anything at all to compute a rate from. */
+  outcome: 10,
+  /** Flag rate has a high base rate, so it settles fast — but not at n=2. */
   drafts: 12,
-  /** Contacts before a source's quality can be judged. */
+  /** Contacts before a source's usable share is worth reporting. */
   imported: 25,
 }
 
@@ -89,21 +100,38 @@ export function advise(input: {
 
   /* ── worth doing, once there is enough to judge ────────────────────── */
 
-  // The shift: which letter is actually producing. Only spoken when both have
-  // enough sends to be compared at all.
+  // Which letter is actually producing — decided by whether the confidence
+  // intervals separate, not by whether one number is bigger than another.
+  // At cold-email response rates they usually will not, and saying so with a
+  // figure for how much more would settle it is more use than a false winner.
   const ranked = letters.filter((l) => l.sent >= ENOUGH.outcome)
   if (ranked.length >= 2) {
-    const rate = (l: LetterRow) => l.clickRate + l.replyRate
-    const best = ranked.reduce((a, b) => (rate(b) > rate(a) ? b : a))
-    const worst = ranked.reduce((a, b) => (rate(b) < rate(a) ? b : a))
-    // A difference worth acting on, not a rounding error between two.
-    if (best !== worst && rate(best) >= rate(worst) * 2 && rate(best) > 0) {
-      out.push({
-        level: 'idea',
-        title: `“${best.name}” is working ${(rate(best) / Math.max(rate(worst), 0.001)).toFixed(1)}× better than “${worst.name}”`,
-        why: `${pct(rate(best))} of ${best.sent} sent got a click or a reply, against ${pct(rate(worst))} of ${worst.sent}. Write the next one like the first.`,
-        fix: { label: `Read “${best.name}”`, href: `/?c=${best.id}&step=1` },
-      })
+    const band = (l: LetterRow) => interval(l.clicked + l.replied, l.sent)
+    const best = ranked.reduce((a, b) => (band(b).rate > band(a).rate ? b : a))
+    const worst = ranked.reduce((a, b) => (band(b).rate < band(a).rate ? b : a))
+
+    if (best !== worst) {
+      const high = band(best)
+      const low = band(worst)
+
+      if (separates(high, low)) {
+        out.push({
+          level: 'idea',
+          title: `“${best.name}” really is beating “${worst.name}”`,
+          why: `${readable(high)} of ${high.n} sent got a click or a reply, against ${readable(low)} of ${low.n}. The ranges do not overlap, so this is a real difference. Write the next one like the first.`,
+          fix: { label: `Read “${best.name}”`, href: `/?c=${best.id}&step=1` },
+        })
+      } else if (high.rate > low.rate) {
+        const more = sendsNeeded(high, low)
+        out.push({
+          level: 'idea',
+          title: `“${best.name}” looks better, but not provably`,
+          why:
+            more === null
+              ? `Both are running at the same rate so far.`
+              : `${readable(high)} against ${readable(low)} — the ranges still overlap, so the gap could be luck. About ${more.toLocaleString()} more sends each would settle it.`,
+        })
+      }
     }
   }
 
@@ -139,13 +167,15 @@ export function advise(input: {
   // read as a broken one.
   if (out.length === 0) {
     const sent = letters.reduce((t, l) => t + l.sent, 0)
+    const got = letters.reduce((t, l) => t + l.clicked + l.replied, 0)
+    const band = interval(got, sent)
     out.push({
       level: 'idea',
-      title: sent === 0 ? 'Nothing has gone out yet' : 'Too early to tell',
+      title: sent === 0 ? 'Nothing has gone out yet' : 'Nothing conclusive yet',
       why:
         sent === 0
           ? 'Advice needs outcomes to work from. Approve some drafts and put a letter in the post.'
-          : `${sent} sent so far. Rates start meaning something around ${ENOUGH.outcome} per letter.`,
+          : `${got} of ${sent} sent got a click or a reply — somewhere between ${readable(band)}. Cold outbound runs around 3% and it takes several hundred sends before a rate means much.`,
     })
   }
 
