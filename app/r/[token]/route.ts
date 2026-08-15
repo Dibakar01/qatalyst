@@ -14,7 +14,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
   let destination: string | null = null
   if (trace) {
     try {
-      destination = await recordClick(trace)
+      ;({ destination } = await recordClick(trace))
     } catch {
       // Recording the click is bookkeeping. Never let it cost the click, and
       // never let it cost the destination either — a failure here falls back
@@ -34,5 +34,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
     to.searchParams.set('t', token)
     to.searchParams.set('qt', token)
   }
-  return Response.redirect(to, 302)
+  // The token names a person, so keep it out of the destination's referrer log
+  // and out of anything the landing page's own third-party tags can read there.
+  return new Response(null, {
+    status: 302,
+    headers: { location: to.toString(), 'referrer-policy': 'no-referrer' },
+  })
 }

@@ -215,6 +215,55 @@ export function nextAction(
   return { label: tally.sent > 0 ? 'all posted' : 'nobody to write to', action: 'none', count: 0 }
 }
 
+/* ── how long a tracked link stays live ───────────────────────────────────── */
+
+/**
+ * A tracked link stops attributing after this long.
+ *
+ * Judged against the message's `sent_at`, deliberately **not** sealed into the
+ * token. The token is baked into an email we can never reach again, so an
+ * expiry inside it could never be extended — at day 181 every link in every
+ * sent letter would be dead with no way to revive one. Checking the send date
+ * instead leaves the token untouched, so a campaign can be re-tracked by
+ * moving a date in our own database.
+ *
+ * 180 days comfortably outlasts an intro → nudge → revive sequence run over a
+ * quarter, and still means a token leaked into a customer's localStorage or a
+ * destination's referrer log stops working inside two quarters.
+ */
+export const TRACKING_DAYS = 180
+
+/** Warn while it is still cheap to act. */
+export const TRACKING_WARN_DAYS = 14
+
+/**
+ * Whether a link sent then is still attributable now.
+ *
+ * `until` is the campaign's override — the re-track. Null means the default
+ * window from the send date.
+ */
+export function trackingLive(
+  sentAt: Date | null | undefined,
+  now = new Date(),
+  until?: Date | null,
+) {
+  if (until) return now <= until
+  // Never sent, so nothing has aged. A draft's link is as live as the draft.
+  if (!sentAt) return true
+  return daysSince(sentAt, now)! < TRACKING_DAYS
+}
+
+/** Days until a link stops attributing. Negative once it has. */
+export function trackingLeft(
+  sentAt: Date | null | undefined,
+  now = new Date(),
+  until?: Date | null,
+) {
+  if (until) return Math.ceil((until.getTime() - now.getTime()) / 86_400_000)
+  if (!sentAt) return TRACKING_DAYS
+  return TRACKING_DAYS - daysSince(sentAt, now)!
+}
+
 /* ── the domain's own ceiling ─────────────────────────────────────────────── */
 
 /**

@@ -1,0 +1,1 @@
+ALTER TABLE "campaigns" ADD COLUMN "tracking_until" timestamp with time zone;

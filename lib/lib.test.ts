@@ -38,6 +38,9 @@ const {
   warmupCap,
   WARMUP_START,
   WINDOW,
+  trackingLive,
+  trackingLeft,
+  TRACKING_DAYS,
 } = await import('./rules.ts')
 const mat4 = await import('./mat4.ts')
 
@@ -267,6 +270,44 @@ test('practice survives a save, and is only ever a boolean', () => {
   // And it never becomes a truthy string by accident.
   assert.equal(clampTuning({ practice: 'off' }, SAFE).practice, false)
   assert.equal(clampTuning({ practice: 'no' }, SAFE).practice, false)
+})
+
+/* how long a tracked link stays live ---------------------------------------- */
+
+const daysAgo = (n: number, from = new Date('2026-08-15T12:00:00')) =>
+  new Date(from.getTime() - n * 86_400_000)
+
+test('a tracked link attributes for 180 days from the send', () => {
+  const now = new Date('2026-08-15T12:00:00')
+  assert.equal(trackingLive(daysAgo(1), now), true, 'yesterday')
+  assert.equal(trackingLive(daysAgo(179), now), true, 'the day before it lapses')
+  assert.equal(trackingLive(daysAgo(180), now), false, 'and then it stops')
+  assert.equal(TRACKING_DAYS, 180, 'a quarter-long sequence fits inside it twice')
+  // A draft has not aged, because nothing has been sent.
+  assert.equal(trackingLive(null, now), true, 'an unsent letter is not expiring')
+})
+
+test('the window is judged by the send date, so it can be extended', () => {
+  // The reason it is not sealed into the token: the token sits inside an email
+  // we can never reach again, so an expiry baked into it could never be moved
+  // and re-tracking would be impossible by construction.
+  const now = new Date('2026-08-15T12:00:00')
+  const old = daysAgo(300)
+
+  assert.equal(trackingLive(old, now), false, 'lapsed on the default window')
+  assert.equal(
+    trackingLive(old, now, new Date('2026-12-01T00:00:00')),
+    true,
+    're-tracking revives a link already sitting in someone inbox',
+  )
+  assert.equal(trackingLive(old, now, daysAgo(5)), false, 'an override in the past revives nothing')
+})
+
+test('how many days a link has left, so it can be warned about', () => {
+  const now = new Date('2026-08-15T12:00:00')
+  assert.equal(trackingLeft(daysAgo(0), now), 180, 'sent today')
+  assert.equal(trackingLeft(daysAgo(170), now), 10, 'ten to go')
+  assert.ok(trackingLeft(daysAgo(200), now) < 0, 'negative once it has lapsed')
 })
 
 /* where a tracked link may land --------------------------------------------- */

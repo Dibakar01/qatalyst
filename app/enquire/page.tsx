@@ -21,10 +21,23 @@ export default async function Enquire({ searchParams }: PageProps<'/enquire'>) {
   const done = sp.sent === '1'
   const trace = token ? readLink(token) : null
 
-  // Prefilled only when they arrived through their own link, and only with
-  // what we already had about them.
+  // A first name, and nothing else.
+  //
+  // This used to select the whole contact row and render the full name, the
+  // company and the email address — a PII lookup, from one URL parameter, on
+  // the deployment whose entire purpose is to hold no contact list. And the
+  // token is treated as public everywhere else: it rides in a redirect that
+  // leaves the origin, it lands in the destination's access logs and Referer,
+  // and qt.js writes it to localStorage on the customer's own site where any
+  // third-party tag can read it.
+  //
+  // A first name is a friendly greeting. The rest was a lookup service.
   const [known] = trace
-    ? await db.select().from(contacts).where(eq(contacts.id, trace.contactId)).limit(1)
+    ? await db
+        .select({ firstName: contacts.firstName })
+        .from(contacts)
+        .where(eq(contacts.id, trace.contactId))
+        .limit(1)
     : []
 
   async function submit(formData: FormData) {
@@ -77,7 +90,7 @@ export default async function Enquire({ searchParams }: PageProps<'/enquire'>) {
                 <span className="text-micro font-semibold uppercase tracking-[0.16em] text-dim">Name</span>
                 <input
                   name="name"
-                  defaultValue={[known?.firstName, known?.lastName].filter(Boolean).join(' ')}
+                  defaultValue={known?.firstName ?? ''}
                   className="w-full rounded-[5px] border border-line bg-raise px-3 py-2 transition-colors focus:border-primary"
                 />
               </label>
@@ -85,7 +98,7 @@ export default async function Enquire({ searchParams }: PageProps<'/enquire'>) {
                 <span className="text-micro font-semibold uppercase tracking-[0.16em] text-dim">Company</span>
                 <input
                   name="company"
-                  defaultValue={known?.company ?? ''}
+                  defaultValue=""
                   className="w-full rounded-[5px] border border-line bg-raise px-3 py-2 transition-colors focus:border-primary"
                 />
               </label>
@@ -97,7 +110,7 @@ export default async function Enquire({ searchParams }: PageProps<'/enquire'>) {
                 name="email"
                 type="email"
                 required
-                defaultValue={known?.email ?? ''}
+                defaultValue=""
                 className="w-full rounded-[5px] border border-line bg-raise px-3 py-2 transition-colors focus:border-primary"
               />
             </label>

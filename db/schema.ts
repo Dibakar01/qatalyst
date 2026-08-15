@@ -169,6 +169,15 @@ export const campaigns = pgTable('campaigns', {
    * body stores `/r/<token>` and never the destination.
    */
   destinationUrl: text('destination_url'),
+  /**
+   * Keep this letter's links attributing until then. The re-track.
+   *
+   * Null means the default window from each message's own send date. Set here
+   * rather than in the token because the token is inside an email we can no
+   * longer reach — this is the only place an already-sent link can be revived
+   * from.
+   */
+  trackingUntil: timestamp('tracking_until', { withTimezone: true }),
   kind: campaignKind('kind').notNull().default('outbound'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 })

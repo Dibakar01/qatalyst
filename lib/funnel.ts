@@ -4,6 +4,7 @@ import { campaigns, contacts, conversions, enquiries, events, messages } from '.
 import { isValidEmail, normalise } from './email.ts'
 import { attribute } from './attribute.ts'
 import { advance } from './segments.ts'
+import { trackingLive } from './rules.ts'
 import type { Trace } from './token.ts'
 
 /**
@@ -39,22 +40,33 @@ async function messageFor({ contactId, campaignId }: Trace) {
  * Null destination means the built-in enquiry form, which is what every letter
  * written before campaigns had a destination will return.
  */
-export async function recordClick(trace: Trace) {
+export async function recordClick(trace: Trace, now = new Date()) {
   const [row] = await db
-    .select({ id: messages.id, destination: campaigns.destinationUrl })
+    .select({
+      id: messages.id,
+      sentAt: messages.sentAt,
+      destination: campaigns.destinationUrl,
+      until: campaigns.trackingUntil,
+    })
     .from(messages)
     .innerJoin(campaigns, eq(campaigns.id, messages.campaignId))
     .where(and(eq(messages.campaignId, trace.campaignId), eq(messages.contactId, trace.contactId)))
     .limit(1)
 
-  await db.insert(events).values({
-    contactId: trace.contactId,
-    messageId: row?.id ?? null,
-    type: 'click',
-    payload: { campaignId: trace.campaignId },
-  })
+  // Past its window the link still works — it simply stops being evidence.
+  // Refusing to redirect would punish a reader for a link we sent them, which
+  // is the same rule a forged token already gets.
+  const live = trackingLive(row?.sentAt, now, row?.until)
+  if (live) {
+    await db.insert(events).values({
+      contactId: trace.contactId,
+      messageId: row?.id ?? null,
+      type: 'click',
+      payload: { campaignId: trace.campaignId },
+    })
+  }
 
-  return row?.destination ?? null
+  return { destination: row?.destination ?? null, attributed: live }
 }
 
 
