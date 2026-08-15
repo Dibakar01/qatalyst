@@ -188,6 +188,13 @@ export const settings = pgTable('settings', {
   catchAllCap: integer('catch_all_cap').notNull().default(10),
   draftBatch: integer('draft_batch').notNull().default(25),
   /**
+   * Basis points of sends that opt out before a mailbox stops itself.
+   *
+   * Google judges on spam complaints under 0.3%, and that figure lives only in
+   * Postmaster Tools. Opt-outs are the leading indicator we can actually see.
+   */
+  unsubscribeThreshold: integer('unsubscribe_threshold').notNull().default(200),
+  /**
    * Practice: run everything, deliver nothing.
    *
    * Separate from whether a Gmail key exists. A key can be present and correct
@@ -228,6 +235,19 @@ export const domains = pgTable('domains', {
    * Published guidance settles around 250; the clamp keeps it near there.
    */
   dailyCap: integer('daily_cap').notNull().default(250),
+  /**
+   * What Google says about this domain, from Postmaster Tools.
+   *
+   * The only source for the spam rate Google actually judges senders on —
+   * nothing open-source can produce it, because only Google holds the data.
+   * Stored as the 95% upper bound in basis points rather than the point
+   * estimate: Google publishes both, and for a decision that can burn a domain
+   * the honest question is "how bad could this be", not "what is the average".
+   */
+  spamRatio: integer('spam_ratio'),
+  /** HIGH, MEDIUM, LOW or BAD, as Google categorises it. */
+  reputation: text('reputation'),
+  statsAt: timestamp('stats_at', { withTimezone: true }),
   active: boolean('active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 })

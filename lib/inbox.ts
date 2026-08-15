@@ -2,7 +2,16 @@ import { and, eq, inArray, isNotNull, isNull, sql as raw } from 'drizzle-orm'
 import { db } from '../db/index.ts'
 import { contacts, events, mailboxes, messages, warmups } from '../db/schema.ts'
 import { deliver, tokenFor } from './gmail.ts'
-import { answers, classify, header, isBounce, readReport, type Headers } from './replies.ts'
+import {
+  answers,
+  classify,
+  header,
+  isBounce,
+  isComplaint,
+  readComplaint,
+  readReport,
+  type Headers,
+} from './replies.ts'
 import { reply } from './warmup.ts'
 import { tuning } from './settings.ts'
 import { suppress } from './suppression.ts'
@@ -28,6 +37,8 @@ type Result = {
   bounced: number
   replied: number
   auto: number
+  /** Spam-button presses, via any provider that runs a feedback loop. */
+  complaints: number
   detail: string[]
 }
 
@@ -55,14 +66,14 @@ async function fetchJson(url: string, token: string) {
  * the MIME tree because the report can be nested inside the `multipart/report`
  * rather than sitting at the top level.
  */
-async function deliveryReport(id: string, token: string) {
+async function machineReadable(id: string, token: string, wanted: string) {
   const full = (await fetchJson(`${LIST}/${id}?format=full`, token)) as {
     payload?: MimePart
   }
 
   const find = (part?: MimePart): string | null => {
     if (!part) return null
-    if (part.mimeType === 'message/delivery-status' && part.body?.data) {
+    if (part.mimeType === wanted && part.body?.data) {
       return Buffer.from(part.body.data, 'base64url').toString('utf8')
     }
     for (const child of part.parts ?? []) {
@@ -72,8 +83,7 @@ async function deliveryReport(id: string, token: string) {
     return null
   }
 
-  const block = find(full.payload)
-  return block ? readReport(block) : undefined
+  return find(full.payload)
 }
 
 type MimePart = {
@@ -130,9 +140,19 @@ export async function readMailbox(
     // Ask the mail system what it actually said, rather than reading the
     // subject line and hoping. Only for the ones that look like a bounce, so
     // the cheap pass stays cheap.
-    const report = isBounce(headers) ? await deliveryReport(id, token).catch(() => undefined) : undefined
+    // The authoritative part, whichever kind of report this is. Fetched only
+    // when the headers already say there is one, so the cheap pass stays cheap.
+    let report
+    let complaint
+    if (isComplaint(headers)) {
+      const block = await machineReadable(id, token, 'message/feedback-report').catch(() => null)
+      complaint = block ? readComplaint(block) : undefined
+    } else if (isBounce(headers)) {
+      const block = await machineReadable(id, token, 'message/delivery-status').catch(() => null)
+      report = block ? readReport(block) : undefined
+    }
 
-    const verdict = classify(headers, full.snippet ?? '', report)
+    const verdict = classify(headers, full.snippet ?? '', report, complaint)
     if (verdict.kind === 'ignore' || verdict.answering.length === 0) continue
 
     // Which of our sends this answers. The Message-ID is unique, so this is a
@@ -151,6 +171,29 @@ export async function readMailbox(
 
     // Already settled: a thread that keeps going must not count twice.
     if (ours.status === 'replied' || ours.status === 'bounced') continue
+
+    if (verdict.kind === 'complaint') {
+      // Somebody pressed the spam button. Suppress on any feedback type — we
+      // have been told plainly that this person does not want our mail, and
+      // the reason they give does not change that.
+      await db.insert(events).values({
+        contactId: ours.contactId,
+        messageId: ours.id,
+        type: 'complaint',
+        payload: { mailbox: mailbox.email, ...(verdict.complaint ?? {}) },
+      })
+      if (ours.contactId) {
+        const [who] = await db
+          .select({ email: contacts.email })
+          .from(contacts)
+          .where(eq(contacts.id, ours.contactId))
+          .limit(1)
+        if (who?.email) await suppress(who.email, 'complained')
+      }
+      result.complaints++
+      result.detail.push(`${mailbox.email}: COMPLAINT — ${verdict.complaint?.feedbackType ?? 'spam'}`)
+      continue
+    }
 
     if (verdict.kind === 'bounce') {
       await db.update(messages).set({ status: 'bounced' }).where(eq(messages.id, ours.id))
@@ -258,7 +301,7 @@ const inPractice = async () => (await tuning()).practice
 
 /** Every active mailbox, once. Called from the worker beside the send tick. */
 export async function readTick(): Promise<Result> {
-  const result: Result = { read: 0, bounced: 0, replied: 0, auto: 0, detail: [] }
+  const result: Result = { read: 0, bounced: 0, replied: 0, auto: 0, complaints: 0, detail: [] }
 
   const boxes = await db
     .select({

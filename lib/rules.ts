@@ -11,6 +11,44 @@ import type { Contact, Mailbox } from '../db/schema.ts'
  */
 export const WINDOW = { start: 9 * 60, end: 17 * 60 }
 
+/**
+ * Which days a person actually sends on.
+ *
+ * Nothing here knew what day it was, so a mailbox pushed cold outreach at the
+ * same rate on Sunday as on Tuesday — a pattern no person produces, and
+ * M3AAWG's Sending Domains BCP puts consistent, human-shaped volume at the
+ * centre of how reputation is judged. Weekend outreach also earns worse
+ * engagement, which is itself an input to that reputation, so the volume is
+ * not merely wasted: it is counted against us.
+ *
+ * https://www.m3aawg.org/SendingDomsBCP
+ */
+export function isSendingDay(now = new Date()) {
+  const day = now.getDay()
+  return day >= 1 && day <= 5
+}
+
+/**
+ * How many calendar days to get through a queue at a given daily rate.
+ *
+ * Not a division. Sending happens five days in seven, so dividing by the daily
+ * rate under-counts by two sevenths — which the capacity readout was doing,
+ * quietly promising a date it could not meet.
+ */
+export function calendarDays(waiting: number, perDay: number, from = new Date()) {
+  if (perDay <= 0 || waiting <= 0) return 0
+  let left = waiting
+  let days = 0
+  const cursor = new Date(from)
+  // Walk real days, because where the weekend falls changes the answer.
+  while (left > 0 && days < 3650) {
+    days++
+    cursor.setDate(cursor.getDate() + 1)
+    if (isSendingDay(cursor)) left -= perDay
+  }
+  return days
+}
+
 /** Rule 2: catch-all addresses are capped well below the normal daily cap. */
 export const CATCH_ALL_CAP = 10
 
@@ -28,6 +66,8 @@ export type Tuning = {
   bounceMinimum?: number
   catchAllCap?: number
   draftBatch?: number
+  /** Basis points. 200 = 2.00% of sends opting out. */
+  unsubscribeThreshold?: number
   /** Run everything, deliver nothing. Not a number, so it is not clamped. */
   practice?: boolean
 }
@@ -50,6 +90,9 @@ export const LIMITS = {
   bounceMinimum: [10, 500],
   catchAllCap: [0, 50],
   draftBatch: [1, 100],
+  // Below 0.5% a handful of opt-outs stops everything; above 5% the list is
+  // already doing damage by the time anything reacts.
+  unsubscribeThreshold: [50, 500],
 } as const
 
 /** Clamped and whole. Anything unparseable falls back to the safe default. */
@@ -270,6 +313,29 @@ export function daysSince(started: Date | null, now = new Date()) {
 }
 
 /** Rule 2: a mailbox bouncing above 3% halts its campaigns automatically. */
+/**
+ * Google's line is 0.3% spam complaints, and we cannot see that number.
+ *
+ * It exists only in Postmaster Tools, which is the sole source for it — no
+ * open-source tool can produce it, because only Google holds the data. What we
+ * do have is every opt-out, recorded and until now never looked at.
+ *
+ * People unsubscribe before they mark spam, so this is the leading indicator
+ * of the thing that actually gets a domain judged. A high rate means the
+ * targeting or the copy is wrong, and waiting for it to appear as bounces will
+ * not work — bad targeting bounces no more than good targeting does.
+ *
+ * https://support.google.com/a/answer/81126
+ */
+export const UNSUBSCRIBE_THRESHOLD = 200 // basis points: 2.00%
+
+export function unsubscribeHalt(sent: number, unsubscribed: number, tuning: Tuning = {}) {
+  const threshold = (tuning.unsubscribeThreshold ?? UNSUBSCRIBE_THRESHOLD) / 10_000
+  const minimum = tuning.bounceMinimum ?? BOUNCE_MINIMUM
+  if (sent < minimum) return false
+  return unsubscribed / sent > threshold
+}
+
 export function shouldHalt(sent: number, bounced: number, tuning: Tuning = {}) {
   const threshold = (tuning.bounceThreshold ?? BOUNCE_THRESHOLD * 10_000) / 10_000
   const minimum = tuning.bounceMinimum ?? BOUNCE_MINIMUM

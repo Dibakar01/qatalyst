@@ -4,6 +4,7 @@ import { and, eq, isNull, lt, or } from 'drizzle-orm'
 import { db, sql } from '../db/index.ts'
 import { connectors } from '../db/schema.ts'
 import { WINDOW } from '../lib/rules.ts'
+import { refreshPostmaster } from '../lib/domains.ts'
 import { readTick } from '../lib/inbox.ts'
 import { sendTick } from '../lib/send.ts'
 import { canPull, runSource } from '../lib/sources.ts'
@@ -58,6 +59,10 @@ console.log(
 while (!stopping) {
   try {
     await pullDue()
+    // What Google thinks of each domain. Once a day; a domain over the 0.30%
+    // line pauses itself here rather than waiting to be noticed.
+    const checked = await refreshPostmaster()
+    if (checked > 0) console.log(`${clock()}  postmaster: ${checked} ${checked === 1 ? 'domain' : 'domains'} checked`)
 
     // Read before sending. What came back changes what may go out — a bounce
     // can halt a mailbox, and a reply must stop the follow-up — so listening

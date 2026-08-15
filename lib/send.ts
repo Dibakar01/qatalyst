@@ -17,6 +17,7 @@ import {
   allowanceNow,
   daysSince,
   domainAllowance,
+  isSendingDay,
   maySend,
   shouldHalt,
   warmupCap,
@@ -146,6 +147,12 @@ export async function mailboxStats(mailboxId: string, now = new Date()): Promise
  */
 export async function sendTick(now = new Date()): Promise<TickResult> {
   const result: TickResult = { sent: 0, halted: [], dryRun: !isConfigured(), detail: [] }
+
+  // Nothing goes out at the weekend, warm-up included. A mailbox sending cold
+  // outreach on a Sunday at its weekday rate is a pattern no person produces,
+  // and M3AAWG puts consistent human-shaped volume at the centre of how
+  // reputation is judged.
+  if (!isSendingDay(now)) return result
   // Each mailbox arrives with its domain, because the domain decides both the
   // credential to send with and how much of its cap has been earned so far.
   const boxes = await db

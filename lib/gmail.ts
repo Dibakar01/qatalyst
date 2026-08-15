@@ -14,7 +14,13 @@ import { isSuppressed } from './suppression.ts'
  * Admin → Security → API controls → Domain-wide delegation. Until it is, the
  * read pass fails its token request and says so rather than changing anything.
  */
-const SCOPE = 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly'
+const SCOPE = [
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/gmail.readonly',
+  // Postmaster Tools: the only source for the spam rate Google judges on.
+  // Read-only, and about domains rather than mailboxes.
+  'https://www.googleapis.com/auth/postmaster.readonly',
+].join(' ')
 const TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me/messages'
 

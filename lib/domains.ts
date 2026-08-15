@@ -3,6 +3,8 @@ import { db } from '../db/index.ts'
 import { domains, mailboxes, type Domain } from '../db/schema.ts'
 import { domainOf } from './email.ts'
 import { clampDomainCap, daysSince, warmupCap } from './rules.ts'
+import { tokenFor } from './gmail.ts'
+import { readStats, trafficFor } from './postmaster.ts'
 
 /**
  * The sending domains, and their credentials.
@@ -196,4 +198,54 @@ export async function addDomain(input: {
     .returning()
 
   return { domain, added: rows.length }
+}
+
+/**
+ * Ask Google what it thinks of each sending domain.
+ *
+ * Once a day is enough — Postmaster reports a day at a time and yesterday is
+ * the latest complete one. Stored on the domain so the sender and the screen
+ * read the same number.
+ *
+ * A domain below Postmaster's reporting threshold, or one never verified in
+ * the console, simply returns nothing. That is not a failure and must not look
+ * like one.
+ */
+export async function refreshPostmaster(now = new Date()) {
+  const rows = await db.select().from(domains).where(eq(domains.active, true))
+  let updated = 0
+
+  for (const domain of rows) {
+    // Yesterday's figures do not change, so there is no point asking twice.
+    if (domain.statsAt && daysSince(domain.statsAt, now) === 0) continue
+
+    const [box] = await db
+      .select({ email: mailboxes.email })
+      .from(mailboxes)
+      .where(eq(mailboxes.domainId, domain.id))
+      .limit(1)
+    if (!box) continue
+
+    const token = await tokenFor(box.email, domain.credentialKey)
+    if (!token) continue
+
+    const verdict = readStats(await trafficFor(domain.name, token, now))
+    await db
+      .update(domains)
+      .set({
+        spamRatio: verdict.spamRatio,
+        reputation: verdict.reputation,
+        statsAt: new Date(),
+      })
+      .where(eq(domains.id, domain.id))
+
+    // Over Google's own line is not a warning. Reputation is lost far faster
+    // than it is earned, so this stops rather than reports.
+    if (verdict.over && domain.active) {
+      await db.update(domains).set({ active: false }).where(eq(domains.id, domain.id))
+    }
+    updated++
+  }
+
+  return updated
 }

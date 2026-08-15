@@ -1,0 +1,1 @@
+ALTER TABLE "settings" ADD COLUMN "unsubscribe_threshold" integer DEFAULT 200 NOT NULL;

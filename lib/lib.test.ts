@@ -8,8 +8,37 @@ const { makeToken, readToken, makeLink, readLink } = await import('./token.ts')
 const { mapRow } = await import('./csv.ts')
 const { assembleBody, fill, missing, variables } = await import('./template.ts')
 const { validate, claims, ungrounded, spammy } = await import('./validators.ts')
-const { allowanceNow, batchSize, frankingCode, maySend, nextAction, shouldHalt, WINDOW } =
-  await import('./rules.ts')
+// One import for every rule, at the top.
+//
+// These were spread over six separate `await import('./rules.ts')` calls down
+// the file. Each is a top-level await, which lets tests registered above it
+// begin running before the consts below are initialised — so a test could hit
+// a temporal dead zone purely because of where it happened to sit. Importing
+// once removes the ordering hazard rather than working around it.
+const {
+  afterFailure,
+  allowanceNow,
+  batchSize,
+  calendarDays,
+  clampDomainCap,
+  clampTuning,
+  daysSince,
+  domainAllowance,
+  DOMAIN_CAP,
+  DOMAIN_CAP_LIMITS,
+  frankingCode,
+  isSendingDay,
+  LIMITS,
+  MAX_ATTEMPTS,
+  maySend,
+  nextAction,
+  shouldHalt,
+  unsubscribeHalt,
+  UNSUBSCRIBE_THRESHOLD,
+  warmupCap,
+  WARMUP_START,
+  WINDOW,
+} = await import('./rules.ts')
 const mat4 = await import('./mat4.ts')
 
 const ada = {
@@ -221,6 +250,7 @@ test('practice survives a save, and is only ever a boolean', () => {
   const SAFE = {
     windowStart: 540, windowEnd: 1020, bounceThreshold: 300,
     bounceMinimum: 20, catchAllCap: 10, draftBatch: 25, practice: false,
+  unsubscribeThreshold: 200,
   }
   // The clamp loop only walks LIMITS, so a flag that is not a number has to be
   // carried explicitly — miss it and every save silently turns practice off,
@@ -237,6 +267,134 @@ test('practice survives a save, and is only ever a boolean', () => {
   // And it never becomes a truthy string by accident.
   assert.equal(clampTuning({ practice: 'off' }, SAFE).practice, false)
   assert.equal(clampTuning({ practice: 'no' }, SAFE).practice, false)
+})
+
+/* what Google says --------------------------------------------------------- */
+
+const { readStats, statsDay, SPAM_LIMIT, SPAM_WARN } = await import('./postmaster.ts')
+
+test("the spam rate is read at its upper bound, not its average", () => {
+  // Google publishes a 95% interval. Before burning a domain the honest
+  // question is how bad this could be, not what the average is — the same
+  // reasoning the advice engine applies to our own rates.
+  const v = readStats({
+    userReportedSpamRatio: 0.002,
+    userReportedSpamRatioLowerBound: 0.001,
+    userReportedSpamRatioUpperBound: 0.004,
+  })
+  assert.equal(v.spamRatio, 40, 'basis points, from the upper bound')
+  assert.equal(v.over, true, '0.40% is over the 0.30% line even though the average is under')
+})
+
+test('Google\'s 0.30% line is where it stops', () => {
+  const at = (ratio: number) => readStats({ userReportedSpamRatioUpperBound: ratio })
+  assert.equal(at(0.0029).over, false)
+  assert.equal(at(0.0031).over, true)
+  assert.equal(SPAM_LIMIT, 30, '0.30% in basis points')
+
+  // And a warning band well before it, while acting is still cheap.
+  assert.equal(at(0.0012).warn, true)
+  assert.equal(at(0.0012).over, false)
+  assert.equal(at(0.0005).warn, false)
+  assert.ok(SPAM_WARN < SPAM_LIMIT)
+})
+
+test('no data is not good news, and does not read as it', () => {
+  // A quiet domain and a clean one look identical if null becomes zero.
+  const none = readStats(null)
+  assert.equal(none.spamRatio, null)
+  assert.equal(none.over, false)
+  assert.equal(none.warn, false)
+  assert.match(none.note, /No data yet/)
+
+  assert.equal(readStats({}).spamRatio, null)
+  assert.equal(readStats({ domainReputation: 'REPUTATION_CATEGORY_UNSPECIFIED' }).reputation, null)
+  assert.equal(readStats({ domainReputation: 'BAD' }).reputation, 'BAD')
+})
+
+test('stats are asked for by day, and yesterday is the latest complete one', () => {
+  assert.equal(statsDay(new Date('2026-08-15T09:00:00')), '20260814')
+  // Across a month boundary, where naive arithmetic goes wrong.
+  assert.equal(statsDay(new Date('2026-03-01T09:00:00')), '20260228')
+  assert.equal(statsDay(new Date('2026-01-01T09:00:00')), '20251231')
+})
+
+/* when a person actually sends ---------------------------------------------- */
+
+
+test('nothing goes out at the weekend', () => {
+  // M3AAWG puts consistent, human-shaped volume at the centre of reputation,
+  // and nobody sends cold outreach at their weekday rate on a Sunday.
+  const on = (iso: string) => isSendingDay(new Date(iso))
+  assert.equal(on('2026-08-17T12:00:00'), true, 'Monday')
+  assert.equal(on('2026-08-21T12:00:00'), true, 'Friday')
+  assert.equal(on('2026-08-15T12:00:00'), false, 'Saturday')
+  assert.equal(on('2026-08-16T12:00:00'), false, 'Sunday')
+})
+
+test('the finish date counts calendar days, not sending days', () => {
+  // The readout used to divide, which quietly promised a date it could not
+  // meet — two days in seven have no sending in them.
+  const friday = new Date('2026-08-21T09:00:00')
+
+  // 100 waiting at 100 a day is one sending day, and the next one is Monday.
+  assert.equal(calendarDays(100, 100, friday), 3, 'Fri → Mon is three days')
+
+  // A week of sending, from a Friday, is seven calendar days: the weekend
+  // passes, then Mon–Fri clears it.
+  assert.equal(calendarDays(500, 100, friday), 7)
+
+  // Nothing waiting takes no time, and no capacity never finishes.
+  assert.equal(calendarDays(0, 100, friday), 0)
+  assert.equal(calendarDays(100, 0, friday), 0)
+})
+
+test('a mailbox stops itself when too many people opt out', () => {
+  // Google judges on spam complaints under 0.3% and only publishes that
+  // through Postmaster Tools. Opt-outs are the leading indicator we hold.
+  assert.equal(unsubscribeHalt(100, 1), false, '1% is under the 2% line')
+  assert.equal(unsubscribeHalt(100, 3), true, '3% is over it')
+
+  // Not on a tiny sample, for the same reason the bounce halt has a floor:
+  // one opt-out from three sends is not a rate.
+  assert.equal(unsubscribeHalt(3, 3), false)
+  assert.equal(unsubscribeHalt(0, 0), false)
+
+  // Tunable, and the default is the documented one.
+  assert.equal(unsubscribeHalt(100, 4, { unsubscribeThreshold: 500 }), false)
+  assert.equal(unsubscribeHalt(100, 6, { unsubscribeThreshold: 500 }), true)
+  assert.equal(UNSUBSCRIBE_THRESHOLD, 200)
+})
+
+/* a complaint is not a bounce ----------------------------------------------- */
+
+const { isComplaint, readComplaint } = await import('./replies.ts')
+
+test('a spam complaint is told apart from a delivery failure', () => {
+  // Both are multipart/report from a postmaster, and both end in suppression —
+  // but for opposite reasons. Recording a complaint as a bounce makes the
+  // bounce rate lie, and the bounce rate is what halts a mailbox.
+  const arf = { 'Content-Type': 'multipart/report; report-type=feedback-report' }
+  const dsn = { 'Content-Type': 'multipart/report; report-type=delivery-status' }
+
+  assert.equal(isComplaint(arf), true)
+  assert.equal(isComplaint(dsn), false)
+  assert.equal(classify(arf, '', undefined, { feedbackType: 'abuse' }).kind, 'complaint')
+  assert.equal(classify(dsn).kind, 'bounce')
+})
+
+test('an ARF report is read per RFC 5965', () => {
+  const block = [
+    'Feedback-Type: abuse',
+    'User-Agent: SomeGenerator/1.0',
+    'Version: 1',
+    'Original-Rcpt-To: ada@example.com',
+  ].join('\r\n')
+
+  const c = readComplaint(block)
+  assert.equal(c.feedbackType, 'abuse')
+  assert.equal(c.originalRcpt, 'ada@example.com')
+  assert.equal(c.reportedBy, 'SomeGenerator/1.0')
 })
 
 /* warming a domain ---------------------------------------------------------- */
@@ -338,7 +496,6 @@ test('unknown never becomes invalid', () => {
 
 /* the domain's own ceiling -------------------------------------------------- */
 
-const { domainAllowance, clampDomainCap, DOMAIN_CAP, DOMAIN_CAP_LIMITS } = await import('./rules.ts')
 
 test('a domain runs out even while its mailboxes have allowance left', () => {
   // The whole point. Per-mailbox caps do not protect a domain: five mailboxes
@@ -381,7 +538,6 @@ test('the domain cap is clamped, so no setting can burn the domain', () => {
 
 const { answers, classify, isAutoReply, isBounce, isHardBounce, readReport } =
   await import('./replies.ts')
-const { afterFailure, MAX_ATTEMPTS } = await import('./rules.ts')
 
 test('a reply is matched even when it is deep in a thread', () => {
   const ours = '<CADm@mail.gmail.com>'
@@ -631,6 +787,7 @@ const { advise, ENOUGH } = await import('./advice.ts')
 const TUNING = {
   windowStart: 540, windowEnd: 1020, bounceThreshold: 300,
   bounceMinimum: 20, catchAllCap: 10, draftBatch: 25, practice: false,
+  unsubscribeThreshold: 200,
 }
 const box = (p = {}) => ({
   email: 'a@x.test', cap: 35, sentToday: 0, sentEver: 100, bounced: 0,
@@ -739,7 +896,6 @@ test('an empty report says so rather than looking broken', () => {
 
 /* warming a domain --------------------------------------------------------- */
 
-const { warmupCap, daysSince, WARMUP_START } = await import('./rules.ts')
 
 test('a fresh domain starts small and never jumps to full cap', () => {
   // Day one is the dangerous one: a brand new domain sending 35 is how it gets
@@ -837,7 +993,6 @@ test('the fields a letter leans on are named, so the audience step can warn', ()
 
 /* the rules, once they are tunable ---------------------------------------- */
 
-const { clampTuning, LIMITS } = await import('./rules.ts')
 
 const SAFE = {
   windowStart: 9 * 60,
@@ -847,6 +1002,7 @@ const SAFE = {
   catchAllCap: 10,
   draftBatch: 25,
   practice: false,
+  unsubscribeThreshold: 200,
 }
 
 test('a tuned window moves the whole ramp with it', () => {

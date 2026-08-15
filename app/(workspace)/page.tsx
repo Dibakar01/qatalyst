@@ -20,8 +20,10 @@ import { conversionCounts, enquiryCount, listEnquiries } from '@/lib/funnel'
 import { byLetter, byMailbox, bySource, listHealth } from '@/lib/reports'
 import { asClock, tuning } from '@/lib/settings'
 import { advise } from '@/lib/advice'
+import { calendarDays } from '@/lib/rules'
 import { interval, readable } from '@/lib/stats'
 import { checkDomain } from '@/lib/authdns'
+import { SPAM_LIMIT } from '@/lib/postmaster'
 import { listDomains } from '@/lib/domains'
 import { audienceOf, listSegments, stageCounts } from '@/lib/segments'
 import { STAGES } from '@/db/schema'
@@ -2197,9 +2199,10 @@ async function BoxesSheet({ boxes }: { boxes: Box[] }) {
               {waiting.toLocaleString()} approved and waiting —{' '}
               <span className="text-ink">
                 {sendable > 0
-                  ? `about ${Math.ceil(waiting / sendable)} ${Math.ceil(waiting / sendable) === 1 ? 'day' : 'days'}`
+                  ? `about ${calendarDays(waiting, sendable)} days`
                   : 'nothing is going out'}
               </span>
+              <span className="pl-2 opacity-70">weekdays only</span>
             </span>
           )}
           <span className="ml-auto text-dim">
@@ -2253,6 +2256,14 @@ async function BoxesSheet({ boxes }: { boxes: Box[] }) {
                 {!domain.connected && <Stamp tone="flagged">no key</Stamp>}
                 {!domain.active && <Stamp tone="paused">paused</Stamp>}
                 {auth.get(domain.name)?.ok === false && <Stamp tone="flagged">dns</Stamp>}
+                {domain.spamRatio !== null && domain.spamRatio > SPAM_LIMIT && (
+                  <Stamp tone="flagged">{`spam ${(domain.spamRatio / 100).toFixed(2)}%`}</Stamp>
+                )}
+                {domain.reputation && domain.reputation !== 'HIGH' && (
+                  <Stamp tone={domain.reputation === 'BAD' ? 'flagged' : 'paused'}>
+                    {domain.reputation.toLowerCase()}
+                  </Stamp>
+                )}
                 {/* Warming is about the domain's age, not its credential —
                     a domain with no key yet is still on day n of its ramp. */}
                 {warming && (

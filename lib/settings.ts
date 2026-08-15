@@ -21,6 +21,7 @@ export const DEFAULTS: Required<Tuning> = {
   draftBatch: 25,
   // Live by default: a fresh install with no key dry-runs anyway.
   practice: false,
+  unsubscribeThreshold: 200,
 }
 
 /**

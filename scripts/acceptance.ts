@@ -148,9 +148,21 @@ await db.insert(messages).values(
   })),
 )
 
-const noon = new Date()
+// A fixed weekday, not "today".
+//
+// The sender does not send at weekends — a mailbox pushing cold outreach on a
+// Sunday at its weekday rate is a pattern no person produces. That made this
+// suite pass Monday to Friday and fail on Saturday, which is the definition of
+// a flaky test: the same code, a different answer, depending on the calendar.
+const nextWeekday = () => {
+  const d = new Date()
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1)
+  return d
+}
+
+const noon = nextWeekday()
 noon.setHours(12, 0, 0, 0)
-const early = new Date()
+const early = nextWeekday()
 early.setHours(7, 0, 0, 0)
 
 assert.equal((await sendTick(early)).sent, 0, 'nothing goes out before the window opens')
