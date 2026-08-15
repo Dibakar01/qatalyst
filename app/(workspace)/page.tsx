@@ -16,7 +16,7 @@ import {
   sentMessages,
 } from '@/lib/campaigns'
 import { contactStats, fieldCoverage, getContact, listContacts } from '@/lib/contacts'
-import { KINDS, review, shape } from '@/lib/compose'
+import { COMPOSE_STEPS, KINDS, review, shape } from '@/lib/compose'
 import { conversionCounts, enquiryCount, listEnquiries } from '@/lib/funnel'
 import { byLetter, byMailbox, bySource, listHealth } from '@/lib/reports'
 import { asClock, tuning } from '@/lib/settings'
@@ -230,6 +230,11 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
   const needsYou = rows.find((r) => r.flagged > 0)
   const listed = one(sp.as) === 'list'
   const making = one(sp.new) === '1'
+  // Only the ask step is two columns, and it is the only reason this panel is
+  // ever wider than every other surface. Widening for all four made the three
+  // single-column steps sit in 1040px of panel with a 448px field in it, and
+  // moved the surface under you on the way in and out.
+  const wide = making && num(sp.at, 1) >= COMPOSE_STEPS
   const find = one(sp.find).trim().toLowerCase()
   const hasPanel = Boolean(openId) || BOOK_VIEWS.has(view) || listed || making
 
@@ -438,9 +443,9 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
             <div className="absolute inset-0 z-10 flex justify-center p-6">
               {/* One column at a readable width for everything that is read.
                   Composing is the exception: it is typing beside watching, and
-                  two columns is what stops step three needing a scroll. */}
+                  two columns is what stops the ask step needing a scroll. */}
               <div
-                className={`flex min-h-0 w-full flex-col ${making ? 'max-w-[1040px]' : 'max-w-[760px]'}`}
+                className={`flex min-h-0 w-full flex-col ${wide ? 'max-w-[1040px]' : 'max-w-[760px]'}`}
               >
                 {making ? (
                   <ComposeSheet sp={sp} />
@@ -539,17 +544,53 @@ function ListSheet({ cards, find }: { cards: Card[]; find: string }) {
 }
 
 /**
- * Three questions, then a letter.
+ * One question a surface, then a letter.
  *
- * What kind of message, what we actually know about these people, and the one
- * thing being asked for. That is enough to write the subject, the body and the
- * model's instruction — nobody should have to learn a mail-merge syntax to send
- * their first letter.
+ * What kind of message, what we actually know about these people, what to call
+ * it, and the one thing being asked for. That is enough to write the subject,
+ * the body and the model's instruction — nobody should have to learn a
+ * mail-merge syntax to send their first letter.
  *
  * The shapes and the checks are in lib/compose.ts, from published cold-email
  * research rather than taste: one ask, a subject about them, roughly a hundred
  * words, and no link in a first touch.
  */
+
+/**
+ * The four questions, in order, and the only place they are written down.
+ *
+ * Naming was the third field on the ask step, under the ask and the sign-off,
+ * where it read as an afterthought — and it is the one thing on that surface
+ * the reader never sees, sitting beneath the two things they do. It gets its
+ * own step, before the ask, so the ask has the surface to itself.
+ */
+const ASKED = [
+  {
+    title: 'What kind of message?',
+    note: 'Three moments, three different emails — not three wordings of one.',
+  },
+  {
+    title: 'Who is it for?',
+    note: 'The model may only use what you tick. Anything it cannot support, it leaves out.',
+  },
+  {
+    title: 'Call this letter',
+    note: 'A name for the desk, not for the reader. Nobody you write to ever sees it.',
+  },
+  {
+    title: 'What are you asking for?',
+    note: 'One ask. Two questions make the reader decide before replying.',
+  },
+] as const
+
+/**
+ * Which step each typed field belongs to.
+ *
+ * A field that is not rendered is a field a submit throws away, so on every
+ * step but its own it has to ride along hidden. That was a hand-written
+ * `step !== 3`, which quietly became wrong the moment a step was inserted.
+ */
+const TYPED_ON = { name: 3, ask: 4, signoff: 4 } as const
 async function ComposeSheet({ sp }: { sp: Params }) {
   const [coverage, segments, stages] = await Promise.all([
     fieldCoverage(),
@@ -565,7 +606,7 @@ async function ComposeSheet({ sp }: { sp: Params }) {
   const preview = shape(kind as (typeof KINDS)[number], one(sp.ask), one(sp.signoff))
   const notes = review(preview.subject, preview.body, SLOT)
 
-  const step = num(sp.at, 1)
+  const step = Math.min(Math.max(num(sp.at, 1), 1), COMPOSE_STEPS)
   const to = (patch: Record<string, string>) => {
     const next = new URLSearchParams({ new: '1', kind, ...patch })
     for (const k of ['ask', 'signoff', 'name'] as const) {
@@ -592,16 +633,10 @@ async function ComposeSheet({ sp }: { sp: Params }) {
   return (
     <Sheet
       label="New letter"
-      title={step === 1 ? 'What kind of message?' : step === 2 ? 'Who is it for?' : 'What are you asking for?'}
-      note={
-        step === 1
-          ? 'Three moments, three different emails — not three wordings of one.'
-          : step === 2
-            ? 'The model may only use what you tick. Anything it cannot support, it leaves out.'
-            : 'One ask. Two questions make the reader decide before replying.'
-      }
+      title={ASKED[step - 1].title}
+      note={ASKED[step - 1].note}
     >
-      <form action={composeCampaign} className="quiet-scroll flex min-h-0 flex-1 flex-col gap-6 p-6">
+      <form action={composeCampaign} className="quiet-scroll fade-foot flex min-h-0 flex-1 flex-col gap-6 p-6">
         {/* The whole choice so far, always in the form.
             These lived inside step 2, which was harmless while the steps were
             links — now that they submit, a field that is not rendered is a
@@ -613,15 +648,14 @@ async function ComposeSheet({ sp }: { sp: Params }) {
         {picked.stages.map((v) => (
           <input key={`stg-${v}`} type="hidden" name="stg" value={v} />
         ))}
-        {/* The three typed fields exist only on step 3, so on steps 1 and 2
-            they have to be carried as hidden ones or a submit from there
-            throws them away — the same trap the audience fell into. */}
-        {step !== 3 &&
-          (['ask', 'signoff', 'name'] as const).map((key) =>
-            one(sp[key]) ? (
-              <input key={key} type="hidden" name={key} value={one(sp[key])} />
-            ) : null,
-          )}
+        {/* Each typed field exists on exactly one step, so on every other one it
+            has to be carried hidden or a submit from there throws it away —
+            the same trap the audience fell into. */}
+        {(Object.keys(TYPED_ON) as (keyof typeof TYPED_ON)[]).map((key) =>
+          step !== TYPED_ON[key] && one(sp[key]) ? (
+            <input key={key} type="hidden" name={key} value={one(sp[key])} />
+          ) : null,
+        )}
 
         {/* ── 1 · which message ─────────────────────────────────────────── */}
         {step === 1 && (
@@ -743,13 +777,49 @@ async function ComposeSheet({ sp }: { sp: Params }) {
           </div>
         )}
 
-        {/* ── 3 · the ask, and what it becomes ──────────────────────────── */}
+        {/* ── 3 · what to call it ───────────────────────────────────────── */}
+        {step === 3 && (
+          <div className="flex max-w-md flex-col gap-5">
+            <label className="flex flex-col gap-2">
+              <Label>Call this letter</Label>
+              <input
+                name="name"
+                defaultValue={one(sp.name)}
+                placeholder="Autumn outreach"
+                className={ruled}
+                required
+                autoFocus
+              />
+              <span className="text-dim">
+                How you will find it on the desk. Something you would say out loud — the
+                month and who it went to is usually enough.
+              </span>
+            </label>
+
+            {/* What has been decided so far, so the name is chosen against it
+                rather than in the dark. */}
+            <dl className="flex flex-col gap-2 border-t border-line pt-5 text-dim">
+              <div className="flex gap-3">
+                <dt className="w-24 shrink-0">Kind</dt>
+                <dd className="min-w-0 flex-1 text-ink">{preview.label}</dd>
+              </div>
+              <div className="flex gap-3">
+                <dt className="w-24 shrink-0">Going to</dt>
+                <dd className="min-w-0 flex-1 text-ink">
+                  {reach} {reach === 1 ? 'address' : 'addresses'}
+                </dd>
+              </div>
+            </dl>
+          </div>
+        )}
+
+        {/* ── 4 · the ask, and what it becomes ──────────────────────────── */}
         {/* Typing on the left, watching on the right.
             These were stacked in one column, which overflowed the panel on a
             laptop and scrolled the letter out of sight at exactly the moment
             you were writing it. They are two different activities and the
             width was there all along. */}
-        {step === 3 && (
+        {step === 4 && (
           <div className="grid min-h-0 gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
             <div className="flex min-w-0 flex-col gap-5">
               <label className="flex flex-col gap-2">
@@ -765,18 +835,6 @@ async function ComposeSheet({ sp }: { sp: Params }) {
               <label className="flex flex-col gap-2">
                 <Label>Sign off as</Label>
                 <input name="signoff" defaultValue={one(sp.signoff) || 'Dibakar'} className={ruled} />
-              </label>
-
-              <label className="flex flex-col gap-2">
-                <Label>Call this letter</Label>
-                <input
-                  name="name"
-                  defaultValue={one(sp.name)}
-                  placeholder="Autumn outreach"
-                  className={ruled}
-                  required
-                />
-                <span className="text-dim">Only you see this.</span>
               </label>
 
               {/* Beside the fields they are about, rather than below a preview
@@ -815,16 +873,18 @@ async function ComposeSheet({ sp }: { sp: Params }) {
         {/* ── where you are, and the way on ─────────────────────────────── */}
         <div className="mt-auto flex items-center gap-3 border-t border-line pt-5">
           <span className="flex items-center gap-1.5" aria-hidden>
-            {[1, 2, 3].map((n) => (
+            {ASKED.map((_, i) => (
               <span
-                key={n}
+                key={i}
                 className={`h-1.5 rounded-full transition-all ${
-                  n === step ? 'w-5 bg-primary' : n < step ? 'w-1.5 bg-ink/50' : 'w-1.5 bg-line'
+                  i + 1 === step ? 'w-5 bg-primary' : i + 1 < step ? 'w-1.5 bg-ink/50' : 'w-1.5 bg-line'
                 }`}
               />
             ))}
           </span>
-          <span className="text-dim">step {step} of 3</span>
+          <span className="text-dim">
+            step {step} of {COMPOSE_STEPS}
+          </span>
 
           {/* Both of these submit rather than navigate.
               As links they threw away whatever had been typed — the URL was
@@ -844,7 +904,7 @@ async function ComposeSheet({ sp }: { sp: Params }) {
                 Back
               </button>
             )}
-            {step < 3 ? (
+            {step < COMPOSE_STEPS ? (
               <button formAction={composeStep.bind(null, step + 1)} className={go}>
                 Next
               </button>
@@ -947,7 +1007,7 @@ async function LetterSheet({
         </div>
       )}
 
-      <div className="quiet-scroll min-h-0 flex-1 p-6">
+      <div className="quiet-scroll fade-foot min-h-0 flex-1 p-6">
         {/* `min-h-full` rather than `h-full` on the form below.
             `h-full` pinned it to the panel and let flex divide what was left —
             and once the fixed rows added up to more than the height, what was
@@ -1597,7 +1657,7 @@ async function ReportsSheet() {
       title="What is actually happening"
       note="Counted from the rows that caused it, never a tally kept alongside."
     >
-      <div className="quiet-scroll min-h-0 flex-1">
+      <div className="quiet-scroll fade-foot min-h-0 flex-1">
         {/* ── what to do ─────────────────────────────────────────────────
             First and largest, because a report you have to interpret is a
             report nobody reads twice. */}
@@ -1888,7 +1948,7 @@ async function SettingsSheet({ saved }: { saved: boolean }) {
     >
       {saved && <p className="shrink-0 bg-primary/[0.07] px-6 py-3 text-primary">Saved.</p>}
 
-      <form action={saveSettings} className="quiet-scroll min-h-0 flex-1">
+      <form action={saveSettings} className="quiet-scroll fade-foot min-h-0 flex-1">
         <div className="flex flex-col gap-6 p-6 text-body leading-[2.2]">
           <p>
             Send between
@@ -2211,7 +2271,7 @@ async function BoxesSheet({ boxes }: { boxes: Box[] }) {
             } — ${sendable} of it can actually send. The rest has no key yet and runs as a dry run.`
       }
     >
-      <div className="quiet-scroll min-h-0 flex-1">
+      <div className="quiet-scroll fade-foot min-h-0 flex-1">
         {/* How much may go out this minute, drawn against the clock. The only
             number here that cannot be read off a list. */}
         {boxes.length > 0 && (

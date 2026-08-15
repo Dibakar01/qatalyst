@@ -26,7 +26,7 @@ import {
 } from '@/lib/contacts'
 import type { Mapping, Row } from '@/lib/csv'
 import { generateForCampaign } from '@/lib/generate'
-import { KINDS, shape, type Kind } from '@/lib/compose'
+import { COMPOSE_STEPS, KINDS, shape, type Kind } from '@/lib/compose'
 import { batchSize, nextAction } from '@/lib/rules'
 import { sendTick } from '@/lib/send'
 import { safeDestination } from '@/lib/destination'
@@ -343,7 +343,7 @@ export async function composeStep(at: number, formData: FormData) {
   // Bound as an argument rather than read from the submit button's name and
   // value: a submitter's name/value does not reliably survive the trip through
   // a server action, and losing it silently sent Back to step one.
-  next.set('at', String(Math.min(Math.max(at, 1), 3)))
+  next.set('at', String(Math.min(Math.max(at, 1), COMPOSE_STEPS)))
   redirect(`/?${next.toString()}`)
 }
 

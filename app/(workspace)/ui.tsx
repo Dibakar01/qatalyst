@@ -276,7 +276,7 @@ export function Drawer({
             ✕
           </Link>
         </div>
-        <div className="quiet-scroll min-h-0 flex-1 p-6">{children}</div>
+        <div className="quiet-scroll fade-foot min-h-0 flex-1 p-6">{children}</div>
       </div>
     </div>
   )

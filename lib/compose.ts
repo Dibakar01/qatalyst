@@ -77,6 +77,14 @@ export function shape(kind: Kind, ask: string, signoff: string): Shape {
 
 export const KINDS: Kind[] = ['intro', 'nudge', 'revive']
 
+/**
+ * How many questions the compose flow asks: kind, audience, name, ask.
+ *
+ * Lives here because the page renders against it and the server action clamps
+ * against it, and those two disagreeing sends Back to the wrong step.
+ */
+export const COMPOSE_STEPS = 4
+
 /* ── the checks ───────────────────────────────────────────────────────────── */
 
 export type Note = { level: 'stop' | 'warn'; text: string }

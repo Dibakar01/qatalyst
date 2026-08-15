@@ -221,19 +221,6 @@ body {
    what was asked to go, not the ability to see the end of a sentence. */
 .quiet-scroll {
   overflow-y: auto;
-  /* The bottom edge fades instead of cutting.
-
-     These panels hide their scrollbar, so a surface with more below it ended
-     mid-sentence against a hard rounded edge — "risky addresses a day, per"
-     and then nothing. That reads as broken, not as continuing, and it is most
-     of what "the elements are bleeding" was pointing at.
-
-     Always on, because a panel's own 24px of inner padding sits inside this
-     box: when the content fits, the gradient falls across empty padding and
-     cannot be seen. It only shows itself when there is something underneath
-     to fade, which is the only time it should. */
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
   /* Setting only one axis makes the other compute to `auto`, and the rule
      below then hides its scrollbar — so anything too wide went off the right
      edge with no bar to reach it and no sign it had happened. Vertical only. */
@@ -243,6 +230,26 @@ body {
      hand; one of them forgetting is a silent clip. */
   min-height: 0;
   scrollbar-width: none;
+}
+
+/* A surface whose content runs past its bottom edge fades there rather than
+   being cut.
+
+   These panels hide their scrollbar, so a surface with more below it ended
+   mid-sentence against a hard rounded edge — "risky addresses a day, per" and
+   then nothing, which reads as broken rather than as continuing. This is what
+   the old `.edge-top` was written for and never used on; it masked the top,
+   and the edge that needed it was the bottom.
+
+   It goes on the panel bodies only, never on a box with something pinned to
+   its foot: the letter preview keeps a note at the bottom by design, and a
+   fade there would dim it forever and promise content that is not underneath
+   it. Always on where it is used, because a panel's own 24px of inner padding
+   sits inside the box — when the content fits, the gradient falls across empty
+   padding and cannot be seen. */
+.fade-foot {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
 }
 
 .quiet-scroll::-webkit-scrollbar {
