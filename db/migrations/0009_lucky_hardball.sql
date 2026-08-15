@@ -1,0 +1,1 @@
+ALTER TABLE "settings" ADD COLUMN "practice" boolean DEFAULT false NOT NULL;

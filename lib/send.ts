@@ -200,6 +200,7 @@ export async function sendTick(now = new Date()): Promise<TickResult> {
           message.subject,
           message.body,
           domain?.credentialKey,
+          rules.practice,
         )
         await db
           .update(messages)

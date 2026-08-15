@@ -28,6 +28,8 @@ export type Tuning = {
   bounceMinimum?: number
   catchAllCap?: number
   draftBatch?: number
+  /** Run everything, deliver nothing. Not a number, so it is not clamped. */
+  practice?: boolean
 }
 
 /**
@@ -66,6 +68,13 @@ export function clampTuning(input: Record<string, unknown>, base: Required<Tunin
   }
   // A window that ends before it starts would silently send nothing all day.
   if (out.windowEnd <= out.windowStart) out.windowEnd = Math.min(out.windowStart + 60, LIMITS.windowEnd[1])
+
+  // Practice is a boolean, so it has no bounds to clamp — but the loop above
+  // only walks LIMITS, and leaving it out here would silently drop it on every
+  // save. Absent means unchanged, exactly like the numbers.
+  if (input.practice !== undefined && input.practice !== null && input.practice !== '') {
+    out.practice = input.practice === true || input.practice === 'true' || input.practice === 'on'
+  }
   return out
 }
 

@@ -111,10 +111,15 @@ export async function deliver(
   subject: string,
   body: string,
   credentialKey?: string | null,
+  /** Practice: run everything, deliver nothing. */
+  practice = false,
 ): Promise<Delivery> {
   if (await isSuppressed(to)) throw new Error(`refused: ${to} is suppressed`)
 
-  const account = credentials(credentialKey)
+  // Checked here rather than at the caller, for the same reason suppression is:
+  // this is the function that talks to Gmail, so a caller written in a hurry
+  // next year cannot get around it.
+  const account = practice ? null : credentials(credentialKey)
   if (!account) {
     // No credentials configured: record what would have been sent and move on.
     return { messageIdHeader: `<dry-run.${crypto.randomUUID()}@qatalyst.local>`, dryRun: true }

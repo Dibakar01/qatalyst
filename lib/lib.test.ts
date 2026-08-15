@@ -217,6 +217,28 @@ test('a typed batch size can never run away with the model budget', () => {
   assert.equal(batchSize('500'), 100, 'the ceiling holds however big the ask')
 })
 
+test('practice survives a save, and is only ever a boolean', () => {
+  const SAFE = {
+    windowStart: 540, windowEnd: 1020, bounceThreshold: 300,
+    bounceMinimum: 20, catchAllCap: 10, draftBatch: 25, practice: false,
+  }
+  // The clamp loop only walks LIMITS, so a flag that is not a number has to be
+  // carried explicitly — miss it and every save silently turns practice off,
+  // which is the direction that costs real email.
+  assert.equal(clampTuning({ practice: true }, SAFE).practice, true)
+  assert.equal(clampTuning({ practice: 'on' }, SAFE).practice, true, 'a checkbox posts "on"')
+  assert.equal(clampTuning({ practice: 'true' }, SAFE).practice, true)
+  assert.equal(clampTuning({ practice: false }, SAFE).practice, false)
+
+  // Absent means unchanged, exactly like every number beside it.
+  assert.equal(clampTuning({}, { ...SAFE, practice: true }).practice, true)
+  assert.equal(clampTuning({ draftBatch: 10 }, { ...SAFE, practice: true }).practice, true)
+
+  // And it never becomes a truthy string by accident.
+  assert.equal(clampTuning({ practice: 'off' }, SAFE).practice, false)
+  assert.equal(clampTuning({ practice: 'no' }, SAFE).practice, false)
+})
+
 /* reading the post that comes back ----------------------------------------- */
 
 const { answers, classify, isAutoReply, isBounce, isHardBounce } = await import('./replies.ts')
@@ -423,7 +445,7 @@ const { advise, ENOUGH } = await import('./advice.ts')
 
 const TUNING = {
   windowStart: 540, windowEnd: 1020, bounceThreshold: 300,
-  bounceMinimum: 20, catchAllCap: 10, draftBatch: 25,
+  bounceMinimum: 20, catchAllCap: 10, draftBatch: 25, practice: false,
 }
 const box = (p = {}) => ({
   email: 'a@x.test', cap: 35, sentToday: 0, sentEver: 100, bounced: 0,
@@ -639,6 +661,7 @@ const SAFE = {
   bounceMinimum: 20,
   catchAllCap: 10,
   draftBatch: 25,
+  practice: false,
 }
 
 test('a tuned window moves the whole ramp with it', () => {

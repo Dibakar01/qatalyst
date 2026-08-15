@@ -64,6 +64,13 @@
       "when": 1786776420365,
       "tag": "0008_jazzy_spot",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786780678249,
+      "tag": "0009_lucky_hardball",
+      "breakpoints": true
     }
   ]
 }

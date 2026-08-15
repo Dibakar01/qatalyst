@@ -16,16 +16,20 @@ import {
  * The letters, and there is nothing else on the stage.
  *
  * They stand in a row, the front one live and the rest falling back behind it.
- * Each carries a mark — the small stamp on its face — which says the one thing
- * that letter needs next and takes you to where you do it. How far the flap is
- * open and how far the sheet has come out is how far that run has actually got,
- * so a glance across the stack tells you which letter is stuck without reading
- * a number.
+ * How far the flap is open and how far the sheet has come out is how far that
+ * run has actually got, so a glance across the stack tells you which letter is
+ * stuck without reading a number.
  *
- * The mark is drawn in GL as part of the envelope, but its label and hit target
- * are a real HTML button pinned to the stamp's projected position every frame.
- * Text stays crisp, the control is reachable by keyboard, and nothing about it
- * has to be re-implemented in a shader.
+ * Three things are written on the object, each shaped like what it is:
+ *
+ *   the name       on the address line, because that is what an envelope carries
+ *   the status     on the stamp, because a postmark records where post has got to
+ *   the action     a button under the letter, because a button is what acts
+ *
+ * The first two are HTML pinned to their projected positions on the face every
+ * frame — text stays crisp and reachable, and none of it has to be redone in a
+ * shader. The stamp used to hold the action instead, which made the only
+ * control on the object look like stationery and left the status printed twice.
  *
  * Raw WebGL2 on purpose. This is three meshes and one light.
  */
@@ -119,13 +123,15 @@ void main() {
     // The face of the envelope — where the address and the stamp go. Both are
     // struck in the secondary, which is the only other colour in this app.
     base = uPrimary;
-    float stamp = rect(vUv, vec2(0.805, 0.700), vec2(0.945, 0.925));
-    float inner = rect(vUv, vec2(0.820, 0.717), vec2(0.930, 0.908));
-    // No drawn address at all. It used to be three abstract bars standing in
-    // for text; the real name and status are now struck here in HTML, and
-    // leaving any of the bars in put a white rule straight through both lines.
-    // The franking stays — that is a barcode, not writing.
-    float mark = clamp(stamp - inner + franking(vUv, uCode) * 0.95, 0.0, 1.0);
+    // Nothing is drawn on the face but the franking.
+    //
+    // The address was three abstract bars and the stamp was an outlined box,
+    // and both were replaced by real HTML text pinned to the same spots. Each
+    // time one was left behind it put a white shape straight through the white
+    // words that had replaced it — the address bars struck through the name,
+    // and the stamp box swallowed the status. The franking stays because it is
+    // a barcode rather than writing, and nothing is written over it.
+    float mark = clamp(franking(vUv, uCode) * 0.95, 0.0, 1.0);
     base = mix(base, uPaper, mark);
   } else if (vKind > 0.5) {
     // The sheet itself. Written on one side, blank on the other.
@@ -198,8 +204,11 @@ const FLAP = 0.46
 const ADDRESS = [0.14, 0.437]
 const ADDRESS_END = [0.62, 0.437]
 
-/** Where the stamp sits on the face, in uv. The mark is pinned here. */
+/** Where the stamp sits on the face, in uv. The postmark is pinned here. */
 const STAMP = [0.875, 0.812]
+
+/** The bottom edge, centre. The action button hangs just below this. */
+const FOOT = [0.5, 0.0]
 
 function envelopeMesh() {
   const x = W / 2
@@ -262,6 +271,9 @@ const REST_PITCH = 0.16
 /** Vertical gap between letters. Roughly a letter and a half, so the one
  *  behind is legible without crowding the one in front. */
 const SPACING = 1.45
+
+/** The camera's vertical field of view. Named because the framing maths needs it. */
+const FOV = Math.PI / 5.2
 /** More than this either side of the front is behind the ones you can see. */
 const NEIGHBOURS = 3
 /** A press that moves less than this many pixels was a click, not a drag. */
@@ -344,6 +356,7 @@ export default function Letter({
   const canvas = useRef<HTMLCanvasElement>(null)
   const markEl = useRef<HTMLDivElement>(null)
   const nameEl = useRef<HTMLDivElement>(null)
+  const actionEl = useRef<HTMLDivElement>(null)
 
   const at = Math.max(
     cards.findIndex((card) => card.id === openId),
@@ -474,7 +487,7 @@ export default function Letter({
         surface.height = h
         gl.viewport(0, 0, w, h)
       }
-      projection = perspective(Math.PI / 5.2, width / height, 0.1, 60)
+      projection = perspective(FOV, width / height, 0.1, 60)
     }
     const box = new ResizeObserver(resize)
     box.observe(surface)
@@ -673,8 +686,32 @@ export default function Letter({
       // square to the camera, so the panel arrives over an object already in
       // the right place.
       const spacing = SPACING + unfold * 4
-      const back = 3.5 + unfold * 0.35
-      const view = translation(0, 0, -back)
+
+      // Stand back far enough to actually hold what is on screen.
+      //
+      // The sheet climbs out of the envelope as the run progresses — up to
+      // 0.92 of a letter's height — and the camera only ever pulled back for
+      // *unfolding*, which is a different thing entirely. So a letter near the
+      // end of its run pushed its own contents off the top of the stage, and
+      // no amount of resizing the window helped, because the framing never
+      // knew the sheet had moved.
+      //
+      // Distance is derived from what is actually there rather than tuned by
+      // hand: half-height over tan(fov/2) is the distance that just fits it,
+      // and FIT is the air around it.
+      const FIT = 1.14
+      const reach = Math.max(H / 2, (H - 0.08) / 2 + opened * H * 0.92)
+      const span = Math.max(W / 2, (W - 0.16) / 2) / Math.max(width / height, 0.1)
+      const back =
+        Math.max(3.5, (Math.max(reach, span) / Math.tan(FOV / 2)) * FIT) + unfold * 0.35
+
+      // And look at the middle of it, not at the envelope.
+      // The content runs from the envelope's bottom edge to the top of the
+      // risen sheet, so its centre climbs as the sheet does. Framing on the
+      // envelope alone leaves the whole thing riding high with dead space
+      // under it — correct, but it reads as badly placed.
+      const middle = (reach - H / 2) / 2
+      const view = translation(0, -middle, -back)
 
       gl!.uniform3f(uCamera, 0, 0, back)
       gl!.clear(gl!.COLOR_BUFFER_BIT | gl!.DEPTH_BUFFER_BIT)
@@ -686,6 +723,7 @@ export default function Letter({
         w: 0,
         on: false,
       }
+      let footScreen: { x: number; y: number; on: boolean } = { x: 0, y: 0, on: false }
       const first = Math.max(Math.round(shown) - NEIGHBOURS, 0)
       const lastCard = Math.min(Math.round(shown) + NEIGHBOURS, deck.length - 1)
 
@@ -759,6 +797,19 @@ export default function Letter({
               (uv[1] - 0.5) * H,
               D / 2,
             )
+          // Where the envelope's bottom edge lands, so the button can hang
+          // under the letter rather than under the stage. Pinned to the object
+          // it belongs to, the same as everything else written on it.
+          const foot = at(FOOT)
+          if (foot[3] > 0) {
+            footScreen = {
+              x: clamp((foot[0] / foot[3] / 2 + 0.5) * width, 90, width - 90),
+              // Below the edge, and never so low it reaches the command bar.
+              y: clamp((0.5 - foot[1] / foot[3] / 2) * height + 34, 40, height - 34),
+              on: unfold < 0.06,
+            }
+          }
+
           const a = at(ADDRESS)
           const b = at(ADDRESS_END)
           if (a[3] > 0 && b[3] > 0) {
@@ -788,6 +839,13 @@ export default function Letter({
       // The name rides the address line: positioned, sized and faded from the
       // face itself, so it turns away with the envelope instead of hanging in
       // front of it.
+      const action = actionEl.current
+      if (action) {
+        action.style.transform = `translate3d(${footScreen.x}px, ${footScreen.y}px, 0) translate(-50%, -50%)`
+        action.style.opacity = footScreen.on ? '1' : '0'
+        action.style.pointerEvents = footScreen.on ? 'auto' : 'none'
+      }
+
       const label = nameEl.current
       if (label) {
         label.style.transform = `translate3d(${nameScreen.x}px, ${nameScreen.y}px, 0)`
@@ -798,6 +856,9 @@ export default function Letter({
         label.style.fontSize = `${clamp(nameScreen.w * 0.088, 11, 30)}px`
         label.style.opacity = nameScreen.on ? '1' : '0'
       }
+
+      const stamp = markEl.current
+      if (stamp) stamp.style.fontSize = `${clamp(nameScreen.w * 0.032, 8, 12)}px`
     }
 
     let frame = requestAnimationFrame(function loop(now) {
@@ -845,24 +906,25 @@ export default function Letter({
         className="size-full touch-none select-none"
       />
 
-      {/* The mark. Pinned to the stamp every frame, and the only control on the
-          object — it always says the one thing this letter needs next. */}
-      <div ref={markEl} className="absolute left-0 top-0 opacity-0 transition-opacity duration-200">
-        {here?.mark && (
-          <button
-            onClick={() => go.current('mark')}
-            className="whitespace-nowrap rounded-[4px] border border-secondary/60 bg-primary px-3 py-2 text-micro font-medium uppercase tracking-[0.12em] text-secondary shadow-[0_6px_20px_-6px_rgba(0,0,0,0.8)] transition-transform hover:scale-105"
-          >
-            {here.count > 0 ? `${here.count} · ${here.mark}` : here.mark}
-          </button>
+      {/* The postmark. Pinned to the stamp every frame, and it says where this
+          letter has got to — which is what a stamp on a real envelope does.
+          It used to carry the next action instead, so the object had a label
+          that was secretly its only button, and the status was repeated under
+          the name. One fact, in one place, shaped like what it is. */}
+      <div
+        ref={markEl}
+        aria-hidden
+        className="pointer-events-none absolute left-0 top-0 opacity-0 transition-opacity duration-200"
+      >
+        {here?.status && (
+          <span className="whitespace-nowrap rounded-[3px] bg-secondary px-2.5 py-1.5 font-medium uppercase leading-none tracking-[0.14em] text-primary shadow-[0_2px_10px_-2px_rgba(0,0,0,0.35)]">
+            {here.status.replace(/_/g, ' ')}
+          </span>
         )}
       </div>
 
       {/* Which letter this is, written where an envelope carries its
-          addressee. It used to sit at the bottom of the screen — a caption
-          bar that stayed put while the letter turned, and went on bleeding out
-          from under any panel opened over it. Now it belongs to the object:
-          name first, then what it is doing, which is the order you read them. */}
+          addressee. The name alone now — the status moved to the postmark. */}
       <div
         ref={nameEl}
         aria-hidden
@@ -871,13 +933,23 @@ export default function Letter({
         <p className="truncate font-medium leading-[1.15] tracking-[-0.02em] text-secondary">
           {here?.name}
         </p>
-        {here?.status && (
-          <p
-            className="truncate uppercase text-secondary opacity-75"
-            style={{ fontSize: '0.46em', marginTop: '0.5em', letterSpacing: '0.16em' }}
+      </div>
+
+      {/* What this letter needs next. A button, looking like a button, sitting
+          under the object rather than stuck to its face. It fades with the
+          letter, so it is never left behind over an open panel. */}
+      <div
+        ref={actionEl}
+        className="pointer-events-none absolute left-0 top-0 whitespace-nowrap opacity-0 transition-opacity duration-200"
+      >
+        {here?.mark && (
+          <button
+            onClick={() => go.current('mark')}
+            className="pointer-events-auto rounded-full bg-primary px-5 py-2.5 font-medium text-secondary shadow-[0_8px_24px_-8px_rgba(0,0,0,0.45)] transition-transform hover:scale-[1.03] active:scale-[0.98]"
           >
-            {here.status.replace(/_/g, ' ')}
-          </p>
+            {here.mark.charAt(0).toUpperCase() + here.mark.slice(1)}
+            {here.count > 0 && <span className="pl-2 tabular-nums opacity-70">{here.count}</span>}
+          </button>
         )}
       </div>
 

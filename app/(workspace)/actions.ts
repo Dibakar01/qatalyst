@@ -8,7 +8,10 @@ import { COOKIE, requireAuth } from '@/lib/auth'
 import {
   approveMessage,
   approveUnflagged,
+  audienceSize,
+  counts,
   createCampaign,
+  getCampaign,
   rejectMessage,
   saveCampaign,
   setCampaignStatus,
@@ -24,7 +27,7 @@ import {
 import type { Mapping, Row } from '@/lib/csv'
 import { generateForCampaign } from '@/lib/generate'
 import { KINDS, shape, type Kind } from '@/lib/compose'
-import { batchSize } from '@/lib/rules'
+import { batchSize, nextAction } from '@/lib/rules'
 import { sendTick } from '@/lib/send'
 import { setDomainActive, setWarming } from '@/lib/domains'
 import { moveStage, tag, type Stage } from '@/lib/segments'
@@ -169,19 +172,46 @@ export async function saveCampaignAction(formData: FormData) {
 }
 
 /** One click writes a bounded batch — a form post should not hang for minutes. */
+/**
+ * Where the letter needs you next, as a step number.
+ *
+ * Every action used to end at `refresh()`, which left you on the step you were
+ * already on — so after drafting twenty-five you sat on *Who* and had to go
+ * and find *Review* yourself. The letter knows what it needs; it just was
+ * never asked. `nextAction` and this mapping already existed and are already
+ * tested, so this is a redirect rather than new logic.
+ */
+const STEP_OF = { draft: 2, read: 3, post: 4, hold: 4, none: 1 } as const
+
+async function onward(id: string) {
+  const [tally, audience, campaign, rules] = await Promise.all([
+    counts(id),
+    audienceSize(id),
+    getCampaign(id),
+    tuning(),
+  ])
+  const next = nextAction(tally, audience, campaign?.status ?? 'draft', rules.draftBatch)
+  redirect(`/?c=${id}&step=${STEP_OF[next.action]}`)
+}
+
 export async function generateAction(formData: FormData) {
   await requireAuth()
   // `write 40` may ask for a bigger batch than the default, but not an
   // unbounded one — every draft is a model call.
   const { draftBatch } = await tuning()
-  await generateForCampaign(field(formData, 'id'), batchSize(field(formData, 'n'), draftBatch))
+  const id = field(formData, 'id')
+  await generateForCampaign(id, batchSize(field(formData, 'n'), draftBatch))
   refresh()
+  await onward(id)
 }
 
 export async function approve(formData: FormData) {
   await requireAuth()
-  await approveMessage(field(formData, 'id'))
+  const campaignId = await approveMessage(field(formData, 'id'))
   refresh()
+  // Reading is one at a time, so this lands on the next marked draft until
+  // there are none, and then on whatever comes after.
+  if (campaignId) await onward(campaignId)
 }
 
 export async function reject(formData: FormData) {
@@ -192,14 +222,18 @@ export async function reject(formData: FormData) {
 
 export async function approveAllClean(formData: FormData) {
   await requireAuth()
-  await approveUnflagged(field(formData, 'id'))
+  const id = field(formData, 'id')
+  await approveUnflagged(id)
   refresh()
+  await onward(id)
 }
 
 export async function startSending(formData: FormData) {
   await requireAuth()
-  await setCampaignStatus(field(formData, 'id'), 'sending')
+  const id = field(formData, 'id')
+  await setCampaignStatus(id, 'sending')
   refresh()
+  await onward(id)
 }
 
 export async function pauseSending(formData: FormData) {
@@ -275,6 +309,44 @@ export async function enrichContacts() {
   }
   refresh()
   redirect(`/?view=book&said=${encodeURIComponent(said)}`)
+}
+
+/**
+ * Move between the compose steps, carrying what was typed.
+ *
+ * The steps used to be plain links, which meant two things: anything typed was
+ * thrown away on Next or Back, because the URL was rebuilt from the *previous*
+ * query string; and `required` never fired, because browsers only validate on
+ * submit. Submitting instead fixes both at once — the values arrive because
+ * they were genuinely sent, and the browser enforces the step's own fields
+ * before it will go anywhere.
+ */
+export async function composeStep(at: number, formData: FormData) {
+  await requireAuth()
+  const next = new URLSearchParams({ new: '1' })
+
+  // Everything the compose flow carries. Written down rather than iterated so
+  // a stray field can never end up in a URL.
+  for (const key of ['kind', 'ask', 'signoff', 'name'] as const) {
+    const value = field(formData, key)
+    if (value) next.set(key, value)
+  }
+  for (const value of formData.getAll('seg')) if (value) next.append('seg', String(value))
+  for (const value of formData.getAll('stg')) if (value) next.append('stg', String(value))
+
+  // Bound as an argument rather than read from the submit button's name and
+  // value: a submitter's name/value does not reliably survive the trip through
+  // a server action, and losing it silently sent Back to step one.
+  next.set('at', String(Math.min(Math.max(at, 1), 3)))
+  redirect(`/?${next.toString()}`)
+}
+
+/** The practice brake. It can only ever make sending safer. */
+export async function togglePractice() {
+  await requireAuth()
+  const now = await tuning()
+  await saveTuning({ practice: !now.practice })
+  refresh()
 }
 
 /* settings ---------------------------------------------------------------- */

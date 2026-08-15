@@ -187,6 +187,14 @@ export const settings = pgTable('settings', {
   bounceMinimum: integer('bounce_minimum').notNull().default(20),
   catchAllCap: integer('catch_all_cap').notNull().default(10),
   draftBatch: integer('draft_batch').notNull().default(25),
+  /**
+   * Practice: run everything, deliver nothing.
+   *
+   * Separate from whether a Gmail key exists. A key can be present and correct
+   * and this still holds the post, so the whole flow can be exercised without
+   * one real email leaving. It can only ever make sending safer.
+   */
+  practice: boolean('practice').notNull().default(false),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
 

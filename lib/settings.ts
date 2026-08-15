@@ -19,6 +19,8 @@ export const DEFAULTS: Required<Tuning> = {
   bounceMinimum: 20,
   catchAllCap: 10,
   draftBatch: 25,
+  // Live by default: a fresh install with no key dry-runs anyway.
+  practice: false,
 }
 
 /**

@@ -6,6 +6,7 @@ import { consentStatus, emailStatus, mailboxes, suppressions } from '@/db/schema
 import {
   audienceSize,
   audienceSizes,
+  postmarks,
   counts,
   getCampaign,
   listCampaigns,
@@ -34,6 +35,7 @@ import {
   addSource,
   approve,
   composeCampaign,
+  composeStep,
   approveAllClean,
   blockDomain,
   enrichContacts,
@@ -47,6 +49,7 @@ import {
   saveCampaignAction,
   applyAdvice,
   saveSettings,
+  togglePractice,
   saveStatus,
   startSending,
   suppressEmail,
@@ -140,12 +143,18 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
   const view = one(sp.view)
   const openId = id(sp.c)
 
-  const [rows, contacts, boxRows, replies] = await Promise.all([
+  const [rows, contacts, boxRows, replies, rules] = await Promise.all([
     listCampaigns(),
     contactStats(),
     db.select().from(mailboxes).orderBy(mailboxes.email),
     enquiryCount(),
+    tuning(),
   ])
+
+  // Live means a key exists *and* the brake is off. Either one alone is not
+  // sending, and saying "live" when nothing is being delivered would be a lie
+  // in the one place it matters most.
+  const live = isConfigured() && !rules.practice
 
   // One query for every letter's audience. This was two per letter on every
   // navigation, which is what the load test caught.
@@ -330,11 +339,39 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
             className="flex items-center gap-2 text-dim transition-colors hover:text-ink"
           >
             <span
-              className={`size-1.5 rounded-full ${isConfigured() ? 'bg-primary' : 'bg-dim'}`}
+              className={`size-1.5 rounded-full ${live ? 'bg-primary' : 'bg-dim'}`}
               aria-hidden
             />
-            {isConfigured() ? 'Gmail live' : 'Dry run'}
+            {live ? 'Gmail live' : isConfigured() ? 'Practice' : 'No key'}
           </Link>
+
+          {/* The brake. It used to be this dot on its own, reporting whether a
+              key existed and unable to stop anything. Now it holds the post
+              even when Gmail is configured — the whole flow runs, nothing is
+              delivered. It can only ever make sending safer. */}
+          {isConfigured() && (
+            <form action={togglePractice}>
+              <button
+                role="switch"
+                aria-checked={!rules.practice}
+                title={rules.practice ? 'Nothing is being delivered' : 'Sending for real'}
+                className="flex items-center gap-2 text-dim transition-colors hover:text-ink"
+              >
+                <span
+                  className={`relative h-4 w-7 rounded-full transition-colors ${
+                    rules.practice ? 'bg-line' : 'bg-primary'
+                  }`}
+                  aria-hidden
+                >
+                  <span
+                    className={`absolute top-0.5 size-3 rounded-full bg-ground transition-all ${
+                      rules.practice ? 'left-0.5' : 'left-3.5'
+                    }`}
+                  />
+                </span>
+              </button>
+            </form>
+          )}
         </span>
 
         {halted.length > 0 && (
@@ -384,9 +421,12 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
             {/* Sits to the right on a wide window so the letter stays in view,
                 and takes the whole stage when there is not room for both. */}
             <div className="absolute inset-0 z-10 flex justify-center p-6">
-              {/* One column, centred, at a readable width. Everything you need
-                  for the task is on a single vertical axis. */}
-              <div className="flex min-h-0 w-full max-w-[760px] flex-col">
+              {/* One column at a readable width for everything that is read.
+                  Composing is the exception: it is typing beside watching, and
+                  two columns is what stops step three needing a scroll. */}
+              <div
+                className={`flex min-h-0 w-full flex-col ${making ? 'max-w-[1040px]' : 'max-w-[760px]'}`}
+              >
                 {making ? (
                   <ComposeSheet sp={sp} />
                 ) : openId ? (
@@ -547,7 +587,26 @@ async function ComposeSheet({ sp }: { sp: Params }) {
       }
     >
       <form action={composeCampaign} className="quiet-scroll flex min-h-0 flex-1 flex-col gap-6 p-6">
+        {/* The whole choice so far, always in the form.
+            These lived inside step 2, which was harmless while the steps were
+            links — now that they submit, a field that is not rendered is a
+            field that gets thrown away. */}
         <input type="hidden" name="kind" value={kind} />
+        {picked.segments.map((v) => (
+          <input key={`seg-${v}`} type="hidden" name="seg" value={v} />
+        ))}
+        {picked.stages.map((v) => (
+          <input key={`stg-${v}`} type="hidden" name="stg" value={v} />
+        ))}
+        {/* The three typed fields exist only on step 3, so on steps 1 and 2
+            they have to be carried as hidden ones or a submit from there
+            throws them away — the same trap the audience fell into. */}
+        {step !== 3 &&
+          (['ask', 'signoff', 'name'] as const).map((key) =>
+            one(sp[key]) ? (
+              <input key={key} type="hidden" name={key} value={one(sp[key])} />
+            ) : null,
+          )}
 
         {/* ── 1 · which message ─────────────────────────────────────────── */}
         {step === 1 && (
@@ -573,16 +632,12 @@ async function ComposeSheet({ sp }: { sp: Params }) {
         )}
 
         {/* ── 2 · who it is for, and what we know ──────────────────────── */}
+        {/* Who it goes to, beside what the model may use. Both lists grow with
+            the data, and stacked in one column they eventually overflow the
+            panel — the same fault the letter scrubber had. */}
         {step === 2 && (
-          <div className="flex flex-col gap-6">
-            {picked.segments.map((v) => (
-              <input key={v} type="hidden" name="seg" value={v} />
-            ))}
-            {picked.stages.map((v) => (
-              <input key={v} type="hidden" name="stg" value={v} />
-            ))}
-
-            <div className="flex flex-col gap-3">
+          <div className="grid min-h-0 gap-8 lg:grid-cols-2">
+            <div className="quiet-scroll flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto">
               <div className="flex items-baseline gap-3">
                 <Label>Who it goes to</Label>
                 <span className="ml-auto flex items-baseline gap-2">
@@ -639,13 +694,13 @@ async function ComposeSheet({ sp }: { sp: Params }) {
               </p>
             </div>
 
-            <div className="flex flex-col gap-3">
+            <div className="quiet-scroll flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto">
               <Label>What the model may lean on</Label>
               <p className="text-dim">
                 A field only some of them have leaves a hole in the rest, so the share matters more
                 than the name.
               </p>
-              <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid gap-2">
                 {coverage.fields.map((f) => {
                   const thin = f.share < 0.6
                   return (
@@ -674,9 +729,14 @@ async function ComposeSheet({ sp }: { sp: Params }) {
         )}
 
         {/* ── 3 · the ask, and what it becomes ──────────────────────────── */}
+        {/* Typing on the left, watching on the right.
+            These were stacked in one column, which overflowed the panel on a
+            laptop and scrolled the letter out of sight at exactly the moment
+            you were writing it. They are two different activities and the
+            width was there all along. */}
         {step === 3 && (
-          <div className="flex flex-col gap-5">
-            <div className="grid gap-5 sm:grid-cols-2">
+          <div className="grid min-h-0 gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+            <div className="flex min-w-0 flex-col gap-5">
               <label className="flex flex-col gap-2">
                 <Label>The one ask</Label>
                 <input
@@ -686,47 +746,54 @@ async function ComposeSheet({ sp }: { sp: Params }) {
                 />
                 <span className="text-dim">Small asks get answered. A demo is a big ask.</span>
               </label>
+
               <label className="flex flex-col gap-2">
                 <Label>Sign off as</Label>
                 <input name="signoff" defaultValue={one(sp.signoff) || 'Dibakar'} className={ruled} />
               </label>
-            </div>
 
-            <label className="flex flex-col gap-2">
-              <Label>Call this letter</Label>
-              <input
-                name="name"
-                defaultValue={one(sp.name)}
-                placeholder="Autumn outreach"
-                className={ruled}
-                required
-              />
-              <span className="text-dim">Only you see this.</span>
-            </label>
+              <label className="flex flex-col gap-2">
+                <Label>Call this letter</Label>
+                <input
+                  name="name"
+                  defaultValue={one(sp.name)}
+                  placeholder="Autumn outreach"
+                  className={ruled}
+                  required
+                />
+                <span className="text-dim">Only you see this.</span>
+              </label>
+
+              {/* Beside the fields they are about, rather than below a preview
+                  that has pushed them off the screen. */}
+              {notes.length > 0 && (
+                <ul className="flex flex-col gap-1">
+                  {notes.map((n) => (
+                    <li key={n.text} className={n.level === 'stop' ? 'text-primary' : 'text-dim'}>
+                      · {n.text}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
 
             {/* What it becomes, before it exists. */}
-            <div className="rounded-[6px] border border-line">
-              <p className="border-b border-line bg-raise px-3 py-2">
-                <span className="text-dim">Subject </span>
-                {preview.subject}
-              </p>
-              <pre className="whitespace-pre-wrap px-3 py-3 font-sans leading-[1.7]">{preview.body}</pre>
-              <p className="border-t border-line px-3 py-2 text-dim">
-                <strong className="font-medium text-ink">{'{{personalised}}'}</strong> is the only line
-                the model writes. Everything else is yours.
-              </p>
+            <div className="flex min-h-0 min-w-0 flex-col">
+              <Label>The letter</Label>
+              <div className="quiet-scroll mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto rounded-[6px] border border-line">
+                <p className="shrink-0 border-b border-line bg-raise px-3 py-2">
+                  <span className="text-dim">Subject </span>
+                  {preview.subject}
+                </p>
+                <pre className="whitespace-pre-wrap px-3 py-3 font-sans leading-[1.7]">
+                  {preview.body}
+                </pre>
+                <p className="mt-auto shrink-0 border-t border-line px-3 py-2 text-dim">
+                  <strong className="font-medium text-ink">{'{{personalised}}'}</strong> is the only
+                  line the model writes. Everything else is yours.
+                </p>
+              </div>
             </div>
-
-            {notes.length > 0 && (
-              <ul className="flex flex-col gap-1">
-                {notes.map((n) => (
-                  <li key={n.text} className={n.level === 'stop' ? 'text-primary' : 'text-dim'}>
-                    {n.level === 'stop' ? '· ' : '· '}
-                    {n.text}
-                  </li>
-                ))}
-              </ul>
-            )}
           </div>
         )}
 
@@ -744,16 +811,28 @@ async function ComposeSheet({ sp }: { sp: Params }) {
           </span>
           <span className="text-dim">step {step} of 3</span>
 
+          {/* Both of these submit rather than navigate.
+              As links they threw away whatever had been typed — the URL was
+              rebuilt from the previous query string, so the ask, the sign-off
+              and the name only survived if they were already in it, which they
+              never were. Submitting also means the browser enforces `required`
+              on the step that asks, instead of at the very end. */}
           <span className="ml-auto flex items-center gap-3">
             {step > 1 && (
-              <Link href={to({ at: String(step - 1) })} className={quiet}>
+              <button
+                formAction={composeStep.bind(null, step - 1)}
+                // Going back must never be blocked by a field you have not
+                // reached, so this one step skips validation.
+                formNoValidate
+                className={quiet}
+              >
                 Back
-              </Link>
+              </button>
             )}
             {step < 3 ? (
-              <Link href={to({ at: String(step + 1) })} className={go}>
+              <button formAction={composeStep.bind(null, step + 1)} className={go}>
                 Next
-              </Link>
+              </button>
             ) : (
               <button className={go} disabled={notes.some((n) => n.level === 'stop')}>
                 Write it
@@ -802,16 +881,26 @@ async function LetterSheet({
     )
 
   const clause = Math.min(Math.max(step, 1), 4)
-  const [tally, audience, queue, posted, boxRows] = await Promise.all([
+  const [tally, audience, queue, posted, carried, boxRows] = await Promise.all([
     counts(id),
     audienceSize(id),
     clause === 3 ? reviewQueue(id) : Promise.resolve([]),
     clause === 4 ? sentMessages(id, 3) : Promise.resolve([]),
+    clause === 4 ? postmarks(id) : Promise.resolve([]),
     db.select().from(mailboxes),
   ])
 
   const active = boxRows.filter((box) => box.active)
   const capacity = active.reduce((total, box) => total + box.dailyCap, 0)
+  // Only the domains this letter actually used, so the DNS verdict shows up
+  // where you are about to send rather than only under Settings.
+  const auth = new Map(
+    await Promise.all(
+      [...new Set(carried.map((r) => r.domain))].map(
+        async (name) => [name, await checkDomain(name)] as const,
+      ),
+    ),
+  )
   const hasSlot = campaign.bodyTemplate.includes(`{{${SLOT}}}`)
   const written = tally.drafts + tally.flagged + tally.approved + tally.sent
   const notes = review(campaign.subjectTemplate, campaign.bodyTemplate, SLOT)
@@ -942,6 +1031,35 @@ async function LetterSheet({
                 day between them. Above the bounce threshold this letter stops on its own.
               </p>
             </div>
+
+            {/* Which domains actually carried it.
+                Sending spreads across every healthy mailbox, which is what the
+                warm-up ramps are for — but nothing ever said which ones, so
+                "what is this going out from" had no answer anywhere. */}
+            {carried.length > 0 && (
+              <div className="flex flex-col gap-1.5 rounded-[6px] border border-line p-4">
+                <Label>Going out from</Label>
+                {carried.map((row) => {
+                  const dns = auth.get(row.domain)
+                  return (
+                    <div key={row.mailbox} className="flex items-baseline gap-3">
+                      <span className="min-w-0 flex-1 truncate">
+                        {row.mailbox}
+                        <span className="pl-2 text-dim">{row.domain}</span>
+                      </span>
+                      {dns && (
+                        <span className={dns.ok ? 'text-dim' : 'text-primary'} title={
+                          [dns.spf, dns.dkim, dns.dmarc].filter((c) => !c.ok).map((c) => c.note).join(' ')
+                        }>
+                          {dns.ok ? '✓ SPF DKIM DMARC' : '✗ check DNS'}
+                        </span>
+                      )}
+                      <span className="w-14 text-right tabular-nums">{Number(row.sent)}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
 
             {campaign.status === 'sending' ? (
               <form action={pauseSending} className="flex flex-wrap items-center gap-3">
@@ -1505,6 +1623,71 @@ async function ReportsSheet() {
         </div>
 
         {/* ── letters, ranked by what they produced ──────────────────────── */}
+        {/* ── what the machine is set to ──────────────────────────────────
+            Always here, not only when something is wrong. The advice above
+            fires on a threshold, so on a quiet week Reports had nothing to
+            tune and no sign that tuning existed at all. */}
+        <section className="pt-6">
+          <div className="flex items-baseline gap-3 px-6 pb-3">
+            <Label>Tuning</Label>
+            <span className="text-dim">what the sender is set to, right now</span>
+            <Link href="/?view=settings" className="ml-auto text-dim underline-offset-4 hover:text-ink hover:underline">
+              all settings
+            </Link>
+          </div>
+          <div className="grid gap-px bg-line sm:grid-cols-2">
+            {(
+              [
+                ['Draft batch', rules.draftBatch, 'draftBatch', '', 'how many the model writes at once'],
+                ['Bounce line', rules.bounceThreshold, 'bounceThreshold', '%', 'a mailbox halts itself above this'],
+                ['Catch-all cap', rules.catchAllCap, 'catchAllCap', '', 'risky addresses a day, per mailbox'],
+                ['Bounce minimum', rules.bounceMinimum, 'bounceMinimum', '', 'attempts before a rate counts'],
+              ] as const
+            ).map(([label, value, key, unit, why]) => {
+              const [low, high] = LIMITS[key]
+              // A tenth of the range, so one press is a real change but never a
+              // reckless one. The clamp in lib/rules.ts is still the authority.
+              const step = Math.max(Math.round((high - low) / 10), 1)
+              return (
+                <div key={key} className="flex items-center gap-3 bg-panel px-6 py-3">
+                  <div className="min-w-0 flex-1">
+                    <p>{label}</p>
+                    <p className="text-dim">{why}</p>
+                  </div>
+                  <form action={applyAdvice} className="flex items-center gap-1">
+                    <input type="hidden" name="setting" value={key} />
+                    <button
+                      name="to"
+                      value={Math.max(value - step, low)}
+                      disabled={value <= low}
+                      aria-label={`Lower ${label}`}
+                      className="grid size-7 place-items-center rounded-full border border-line transition-colors hover:border-primary hover:text-primary disabled:opacity-30"
+                    >
+                      −
+                    </button>
+                    <span className="w-16 text-center tabular-nums">
+                      {fmtSetting(value, unit)}
+                    </span>
+                    <button
+                      name="to"
+                      value={Math.min(value + step, high)}
+                      disabled={value >= high}
+                      aria-label={`Raise ${label}`}
+                      className="grid size-7 place-items-center rounded-full border border-line transition-colors hover:border-primary hover:text-primary disabled:opacity-30"
+                    >
+                      +
+                    </button>
+                  </form>
+                </div>
+              )
+            })}
+          </div>
+          <p className="px-6 pt-3 text-dim">
+            The post goes out between {asClock(rules.windowStart)} and {asClock(rules.windowEnd)}.
+            Every value here is clamped — tuning the rules is the point, turning them off is not.
+          </p>
+        </section>
+
         {/* ── the whole funnel ────────────────────────────────────────────
             Sent through to subscribed, which is the only row that is money.
             The last three arrive from your product over /api/conversion. */}

@@ -178,8 +178,15 @@ export async function sentLog({
   return { rows, total, page: Math.max(page, 1), pages: Math.max(Math.ceil(total / size), 1) }
 }
 
-export const approveMessage = (id: string) =>
-  db.update(messages).set({ status: 'approved' }).where(eq(messages.id, id))
+/** Returns the letter it belonged to, so the caller can carry you onward. */
+export async function approveMessage(id: string) {
+  const [row] = await db
+    .update(messages)
+    .set({ status: 'approved' })
+    .where(eq(messages.id, id))
+    .returning({ campaignId: messages.campaignId })
+  return row?.campaignId ?? null
+}
 
 export const rejectMessage = (id: string) =>
   db.delete(messages).where(eq(messages.id, id))
@@ -197,3 +204,27 @@ export const approveUnflagged = (campaignId: string) =>
 
 export const setCampaignStatus = (id: string, status: Campaign['status']) =>
   db.update(campaigns).set({ status }).where(eq(campaigns.id, id))
+
+/**
+ * Which domains actually carried this letter, and how much each did.
+ *
+ * Sending spreads across every healthy mailbox — that is what the warm-up
+ * ramps and per-mailbox caps are for — but until now nothing recorded or showed
+ * which one took a given letter. The behaviour is unchanged; this is the truth
+ * about it, so "which domain is this going out from" has an answer.
+ */
+export async function postmarks(campaignId: string) {
+  return db.execute<{ domain: string; mailbox: string; sent: number }>(raw`
+    select
+      coalesce(d.name, split_part(mb.email, '@', 2)) as domain,
+      mb.email                                       as mailbox,
+      count(*) filter (where m.status = 'sent')::int as sent
+    from messages m
+    join mailboxes mb on mb.id = m.mailbox_id
+    left join domains d on d.id = mb.domain_id
+    where m.campaign_id = ${campaignId}::uuid and m.mailbox_id is not null
+    group by 1, 2
+    having count(*) filter (where m.status = 'sent') > 0
+    order by 3 desc
+  `)
+}
