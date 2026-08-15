@@ -205,9 +205,13 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
   const find = one(sp.find).trim().toLowerCase()
   const hasPanel = Boolean(openId) || BOOK_VIEWS.has(view) || listed || making
 
-  // What Escape means from wherever you are: out of a drawer to its panel, out
-  // of a panel to the stack. Never a dead end.
-  const back = one(sp.contact) || one(sp.panel) ? `/?view=${view}` : hasPanel ? '/' : '/'
+  // Escape goes up exactly one layer, and the layers are these three. Written
+  // out because a collapsed ternary here previously had two identical branches
+  // — a line that looked like a decision and was not.
+  const back = one(sp.contact) || one(sp.panel)
+    ? `/?view=${view}` // a drawer closes onto the panel it opened over
+    : '/' //             a panel closes onto the desk
+
 
   return (
     <>
@@ -246,17 +250,36 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
               ['/?view=reports', 'Reports', null, view === 'reports'],
               ['/?view=returned', 'Blocked', null, view === 'returned'],
             ] as const
-          ).map(([href, label, n, on]) => (
+          ).map(([href, label, n, on], index) => (
             <Link
               key={label}
               href={href}
               aria-current={on ? 'page' : undefined}
-              className={`flex items-center gap-2 rounded-full px-3 py-2 transition-colors ${
-                on ? 'bg-raise text-ink' : 'text-dim hover:text-ink'
+              // The key that reaches it, shown on the thing it reaches. A
+              // shortcut you have to be told about is one nobody uses.
+              title={`${label} · press ${index + 1}`}
+              // A place you can go should look like something you can press.
+              // Flat text in a row reads as a caption, and a caption does not
+              // invite a click.
+              className={`flex items-center gap-2 rounded-full border px-3 py-2 transition-[background-color,border-color,transform] active:scale-[0.97] ${
+                on
+                  ? 'border-primary bg-primary text-secondary'
+                  : 'border-line text-dim hover:border-ink/30 hover:bg-raise hover:text-ink'
               }`}
             >
+              <span className={`text-small tabular-nums ${on ? 'opacity-60' : 'opacity-40'}`}>
+                {index + 1}
+              </span>
               {label}
-              {n !== null && <span className="text-small tabular-nums opacity-60">{n.toLocaleString()}</span>}
+              {n !== null && (
+                <span
+                  className={`rounded-full px-1.5 text-small tabular-nums ${
+                    on ? 'bg-secondary/25' : 'bg-line/70'
+                  }`}
+                >
+                  {n.toLocaleString()}
+                </span>
+              )}
             </Link>
           ))}
         </nav>
@@ -312,7 +335,10 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
               openId={openId || undefined}
               listed={listed || making}
               // Steps aside for the panel rather than hiding behind it.
-              shift={hasPanel ? -1.15 : 0}
+              // Straight back, not aside. A panel to one side and the object
+              // to the other makes the eye cross the screen for every reading;
+              // pushing it away keeps it as context without competing.
+              shift={0}
             />
           )}
         </div>
@@ -321,8 +347,10 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
           <ViewTransition enter="screen" exit="screen" default="none">
             {/* Sits to the right on a wide window so the letter stays in view,
                 and takes the whole stage when there is not room for both. */}
-            <div className="absolute inset-0 z-10 flex justify-center p-6 xl:justify-end">
-              <div className="flex min-h-0 w-full max-w-[860px] flex-col">
+            <div className="absolute inset-0 z-10 flex justify-center p-6">
+              {/* One column, centred, at a readable width. Everything you need
+                  for the task is on a single vertical axis. */}
+              <div className="flex min-h-0 w-full max-w-[760px] flex-col">
                 {making ? (
                   <ComposeSheet sp={sp} />
                 ) : openId ? (
@@ -390,9 +418,6 @@ function ListSheet({ cards, find }: { cards: Card[]; find: string }) {
         <>
           <Link href="/?new=1" className={go}>
             + New letter
-          </Link>
-          <Link href="/" className={quiet} aria-label="Back to the stack">
-            ✕
           </Link>
         </>
       }
@@ -483,11 +508,6 @@ async function ComposeSheet({ sp }: { sp: Params }) {
           : step === 2
             ? 'The model may only use what you tick. Anything it cannot support, it leaves out.'
             : 'One ask. Two questions make the reader decide before replying.'
-      }
-      actions={
-        <Link href="/" className={quiet} aria-label="Cancel">
-          ✕
-        </Link>
       }
     >
       <form action={composeCampaign} className="quiet-scroll flex min-h-0 flex-1 flex-col gap-6 p-6">
@@ -771,7 +791,7 @@ async function LetterSheet({
         </span>
       }
       actions={
-        <Link href="/" className={quiet} aria-label="Put it down">
+        <Link href="/" className={quiet}>
           Put it down
         </Link>
       }
@@ -1349,42 +1369,6 @@ function Bar({ value, danger }: { value: number; danger?: boolean }) {
   )
 }
 
-/**
- * The funnel for one source, drawn as the stages it actually has.
- *
- * A row of numbers cannot show a drop-off; adjacent bars on a shared scale can.
- * Widths are relative to the widest stage so the collapse between two stages is
- * the visible thing rather than the absolute counts.
- */
-function Funnel({ stages }: { stages: { name: string; n: number }[] }) {
-  const top = Math.max(...stages.map((s) => s.n), 1)
-  return (
-    <div className="flex items-end gap-1" aria-hidden>
-      {stages.map((stage) => (
-        <span key={stage.name} className="flex h-8 w-8 items-end" title={`${stage.name}: ${stage.n}`}>
-          <span
-            className="w-full rounded-t-[2px] bg-ink/30"
-            style={{ height: `${Math.max((stage.n / top) * 100, stage.n > 0 ? 8 : 2)}%` }}
-          />
-        </span>
-      ))}
-    </div>
-  )
-}
-
-/** A number that carries its own label, for the things worth reading first. */
-function Stat({ n, of, label, danger }: { n: string; of?: string; label: string; danger?: boolean }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <p className="flex items-baseline gap-1">
-        <span className={`text-display font-medium leading-none ${danger ? 'text-primary' : ''}`}>{n}</span>
-        {of && <span className="text-dim">{of}</span>}
-      </p>
-      <p className="text-dim">{label}</p>
-    </div>
-  )
-}
-
 async function ReportsSheet() {
   const rules = await tuning()
   const [sources, boxes, letters, health] = await Promise.all([
@@ -1396,10 +1380,14 @@ async function ReportsSheet() {
 
   const advice = advise({ mailboxes: boxes, sources, letters, tuning: rules })
   const worst = boxes.reduce((a, b) => (b.towardHalt > (a?.towardHalt ?? -1) ? b : a), boxes[0])
-  const sentAll = letters.reduce((t, l) => t + l.sent, 0)
-  const repliedAll = letters.reduce((t, l) => t + l.replied, 0)
-  const row = 'flex items-center gap-3 border-b border-line px-6 py-2 last:border-b-0'
-  const head = 'flex items-center gap-3 bg-raise px-6 py-2 text-micro uppercase tracking-[0.14em] text-dim'
+  const sent = letters.reduce((t, l) => t + l.sent, 0)
+  const replied = letters.reduce((t, l) => t + l.replied, 0)
+  const clicked = letters.reduce((t, l) => t + l.clicked, 0)
+
+  // Only what changes a decision. Everything a table used to carry that did
+  // not is gone — the detail still lives on the surface that owns it, one
+  // click away, rather than crowding the answer here.
+  const row = 'flex items-center gap-4 px-6 py-2.5'
 
   return (
     <Sheet
@@ -1408,199 +1396,133 @@ async function ReportsSheet() {
       note="Counted from the rows that caused it, never a tally kept alongside."
     >
       <div className="quiet-scroll min-h-0 flex-1">
-        {/* ── what to do about it ────────────────────────────────────────
-            First, because a report you have to interpret yourself is a report
-            nobody reads twice. Every line names its own numbers, and nothing
-            speaks until it has a big enough sample to mean something. */}
-        <div className="flex flex-col gap-3 border-b border-line p-6">
+        {/* ── what to do ─────────────────────────────────────────────────
+            First and largest, because a report you have to interpret is a
+            report nobody reads twice. */}
+        <div className="flex flex-col gap-2 p-6">
           {advice.map((note) => (
             <div
               key={note.title}
-              className={`flex flex-wrap items-baseline gap-3 rounded-[6px] border px-3 py-2 ${
-                note.level === 'urgent'
-                  ? 'border-primary/40 bg-primary/[0.05]'
-                  : 'border-line bg-raise/50'
+              className={`flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-[8px] px-4 py-3 ${
+                note.level === 'urgent' ? 'bg-primary/[0.07]' : 'bg-raise'
               }`}
             >
               <span
-                className={`shrink-0 ${note.level === 'urgent' ? 'text-primary' : 'text-dim'}`}
-                aria-hidden
+                className={`font-medium ${note.level === 'urgent' ? 'text-primary' : ''}`}
               >
-                {note.level === 'acted' ? '✓' : note.level === 'urgent' ? '!' : '·'}
-              </span>
-              <span className={`font-medium ${note.level === 'urgent' ? 'text-primary' : ''}`}>
                 {note.title}
               </span>
               {note.level === 'acted' && <Stamp tone="none">done for you</Stamp>}
-              <span className="min-w-0 flex-1 text-dim">{note.why}</span>
               {note.fix && (
-                <Link href={note.fix.href} className={quiet}>
-                  {note.fix.label}
+                <Link href={note.fix.href} className="ml-auto shrink-0 text-primary underline-offset-4 hover:underline">
+                  {note.fix.label} →
                 </Link>
               )}
+              <span className="w-full text-dim">{note.why}</span>
             </div>
           ))}
         </div>
 
-        {/* The three numbers worth reading before any table. */}
-        <div className="flex flex-wrap items-start gap-10 border-b border-line p-6">
-          <Stat
-            n={worst ? asPercent(worst.bounceRate) : '—'}
-            label={worst ? `worst bounce rate · ${worst.email.split('@')[0]}` : 'no mailboxes'}
-            danger={Boolean(worst && worst.towardHalt > 0.7)}
-          />
-          <Stat n={String(sentAll)} label="sent, all letters" />
-          <Stat
-            n={sentAll > 0 ? asPercent(repliedAll / sentAll) : '—'}
-            of={repliedAll > 0 ? `${repliedAll} replies` : undefined}
-            label="reply rate"
-          />
-          <div className="ml-auto max-w-xs text-dim">
-            Halting above {(rules.bounceThreshold / 100).toFixed(1)}% once {rules.bounceMinimum} have
-            been attempted.{' '}
-            <Link href="/?view=settings" className="underline underline-offset-4 hover:text-ink">
-              Tune
-            </Link>
-          </div>
+        {/* ── the three numbers ──────────────────────────────────────────
+            Sent is effort; the other two are outcome. Nothing else belongs
+            at this size. */}
+        <div className="grid grid-cols-3 gap-px bg-line">
+          {(
+            [
+              [sent.toLocaleString(), 'sent', null],
+              [sent > 0 ? asPercent(clicked / sent) : '—', 'clicked', `${clicked}`],
+              [sent > 0 ? asPercent(replied / sent) : '—', 'replied', `${replied}`],
+            ] as const
+          ).map(([big, label, sub]) => (
+            <div key={label} className="flex flex-col gap-1 bg-panel px-6 py-5">
+              <span className="text-display font-medium leading-none">{big}</span>
+              <span className="text-dim">
+                {label}
+                {sub && sub !== '0' && <span className="ml-1.5 opacity-70">{sub}</span>}
+              </span>
+            </div>
+          ))}
         </div>
 
-        {/* ── is it safe to send today ──────────────────────────────────── */}
+        {/* ── letters, ranked by what they produced ──────────────────────── */}
         <section className="pt-6">
-          <div className="px-6">
-            <Label>Mailboxes · is it safe to send today</Label>
+          <div className="flex items-baseline gap-3 px-6 pb-2">
+            <Label>Letters</Label>
+            <span className="text-dim">by reply rate</span>
           </div>
-          <div className="mt-3">
-            <div className={head}>
-              <span className="min-w-0 flex-1">mailbox</span>
-              <span className="w-24 text-right">today</span>
-              <span className="w-20 text-right">sent</span>
-              <span className="w-24 text-right">bounced</span>
-              <span className="w-16 text-right">to halt</span>
-            </div>
-            {boxes.map((box) => (
-              <div key={box.email} className={row}>
-                <span className="min-w-0 flex-1 truncate">{box.email}</span>
-                <span className="flex w-24 items-center justify-end gap-2">
-                  <Bar value={box.sentToday / Math.max(box.cap, 1)} />
-                  <span className="tabular-nums text-dim">{box.sentToday}</span>
-                </span>
-                <span className="w-20 text-right tabular-nums">{box.sentEver}</span>
-                <span className={`w-24 text-right tabular-nums ${box.towardHalt > 0.7 ? 'text-primary' : 'text-dim'}`}>
-                  {box.bounced > 0 ? asPercent(box.bounceRate) : '—'}
-                </span>
-                <span className="flex w-16 justify-end">
-                  {box.halted ? <Stamp tone="halted">halted</Stamp> : <Bar value={box.towardHalt} danger={box.towardHalt > 0.7} />}
-                </span>
-              </div>
-            ))}
-            {boxes.length === 0 && <p className="px-6 py-3 text-dim">No mailboxes yet.</p>}
-          </div>
-        </section>
+          {[...letters]
+            .sort((a, b) => b.replyRate + b.clickRate - (a.replyRate + a.clickRate))
+            .map((letter) => (
+              <Link key={letter.id} href={`/?c=${letter.id}`} className={`${row} hover:bg-raise`}>
+                <span className="min-w-0 flex-1 truncate">{letter.name}</span>
 
-        {/* ── which source is worth paying for ──────────────────────────── */}
-        <section className="pt-6">
-          <div className="px-6">
-            <Label>Sources · what each one turned into</Label>
-          </div>
-          <div className="mt-3">
-            <div className={head}>
-              <span className="w-20">funnel</span>
-              <span className="min-w-0 flex-1">source</span>
-              <span className="w-24 text-right">sendable</span>
-              <span className="w-16 text-right">sent</span>
-              <span className="w-16 text-right">clicks</span>
-              <span className="w-24 text-right">enquiries</span>
-            </div>
-            {sources.map((source) => (
-              <div key={source.source} className={row}>
-                <span className="w-20">
-                  <Funnel
-                    stages={[
-                      { name: 'contacts', n: source.contacts },
-                      { name: 'sendable', n: source.sendable },
-                      { name: 'sent', n: source.sent },
-                      { name: 'clicked', n: source.clicked },
-                      { name: 'enquired', n: source.enquired },
-                    ]}
-                  />
-                </span>
-                <span className="min-w-0 flex-1 truncate">{source.source}</span>
-                <span className="w-24 text-right tabular-nums text-dim">
-                  {source.sendable}
-                  <span className="ml-1 opacity-60">
-                    {asPercent(source.sendable / Math.max(source.contacts, 1))}
+                {/* A flag rate only appears once it means something, and only
+                    when it is bad. A green "all fine" column is noise. */}
+                {letter.written >= 12 && letter.flagRate > 0.3 && (
+                  <span className="shrink-0 text-primary">{asPercent(letter.flagRate)} flagged</span>
+                )}
+
+                <span className="w-16 shrink-0 text-right tabular-nums text-dim">{letter.sent}</span>
+                <span className="flex w-32 shrink-0 items-center justify-end gap-2">
+                  <Bar value={Math.min((letter.clickRate + letter.replyRate) * 8, 1)} />
+                  <span className="w-12 text-right tabular-nums">
+                    {letter.sent > 0 ? asPercent(letter.clickRate + letter.replyRate) : '—'}
                   </span>
                 </span>
-                <span className="w-16 text-right tabular-nums">{source.sent}</span>
-                <span className="w-16 text-right tabular-nums text-dim">{source.clicked}</span>
-                <span className="w-24 text-right tabular-nums">
-                  {source.enquired > 0 ? (
-                    <span className="text-primary">
-                      {source.enquired}
-                      <span className="ml-1 opacity-70">{source.yieldPerThousand.toFixed(1)}/k</span>
-                    </span>
-                  ) : (
-                    <span className="text-dim">—</span>
-                  )}
-                </span>
-              </div>
+              </Link>
             ))}
-          </div>
+          {letters.length === 0 && <p className="px-6 py-2 text-dim">No letters yet.</p>}
         </section>
 
-        {/* ── is the writing landing ────────────────────────────────────── */}
+        {/* ── sources, ranked by what they returned ──────────────────────── */}
         <section className="pt-6">
-          <div className="px-6">
-            <Label>Letters · a high flag rate means the prompt invents things</Label>
+          <div className="flex items-baseline gap-3 px-6 pb-2">
+            <Label>Sources</Label>
+            <span className="text-dim">enquiries per thousand sent</span>
           </div>
-          <div className="mt-3">
-            <div className={head}>
-              <span className="min-w-0 flex-1">letter</span>
-              <span className="w-28 text-right">flagged</span>
-              <span className="w-16 text-right">sent</span>
-              <span className="w-16 text-right">clicks</span>
-              <span className="w-20 text-right">replies</span>
-            </div>
-            {letters.map((letter) => (
-              <div key={letter.id} className={row}>
-                <Link href={`/?c=${letter.id}`} className="min-w-0 flex-1 truncate hover:underline">
-                  {letter.name}
-                </Link>
-                <span className="flex w-28 items-center justify-end gap-2">
-                  {letter.written > 0 ? (
-                    <>
-                      <Bar value={letter.flagRate} danger={letter.flagRate > 0.3} />
-                      <span className={`tabular-nums ${letter.flagRate > 0.3 ? 'text-primary' : 'text-dim'}`}>
-                        {asPercent(letter.flagRate)}
-                      </span>
-                    </>
-                  ) : (
-                    <span className="text-dim">—</span>
-                  )}
+          {[...sources]
+            .sort((a, b) => b.yieldPerThousand - a.yieldPerThousand)
+            .map((source) => (
+              <div key={source.source} className={row}>
+                <span className="min-w-0 flex-1 truncate">{source.source}</span>
+                <span className="shrink-0 text-dim">
+                  {asPercent(source.sendable / Math.max(source.contacts, 1))} usable
                 </span>
-                <span className="w-16 text-right tabular-nums">{letter.sent}</span>
-                <span className="w-16 text-right tabular-nums text-dim">{letter.clicked}</span>
-                <span className="w-20 text-right tabular-nums">
-                  {letter.replied > 0 ? (
-                    <span className="text-primary">{asPercent(letter.replyRate)}</span>
+                <span className="w-16 shrink-0 text-right tabular-nums text-dim">{source.sent}</span>
+                <span className="w-20 shrink-0 text-right tabular-nums">
+                  {source.enquired > 0 ? (
+                    <span className="text-primary">{source.yieldPerThousand.toFixed(1)}/k</span>
                   ) : (
                     <span className="text-dim">—</span>
                   )}
                 </span>
               </div>
             ))}
-            {letters.length === 0 && <p className="px-6 py-3 text-dim">No letters yet.</p>}
-          </div>
         </section>
 
-        {/* ── how fast the list is being burned ─────────────────────────── */}
-        <section className="p-6">
-          <Label>The list</Label>
-          <p className="mt-2 text-dim">
-            <strong className="font-medium text-ink">{health.total.toLocaleString()}</strong> can never
-            be written to — {health.last7} added this week, {health.last30} this month.
-            {health.unsubscribed > 0 && ` ${health.unsubscribed} asked to stop.`}
-            {health.bounced > 0 && ` ${health.bounced} came back undeliverable.`}
+        {/* ── safety, in one line unless something is wrong ──────────────── */}
+        <section className="pt-6">
+          <div className="flex items-baseline gap-3 px-6 pb-2">
+            <Label>Safety</Label>
+            <Link href="/?view=settings" className="ml-auto text-dim underline-offset-4 hover:text-ink hover:underline">
+              stopping above {(rules.bounceThreshold / 100).toFixed(1)}% · tune
+            </Link>
+          </div>
+          <div className={row}>
+            <span className="min-w-0 flex-1">
+              {worst && worst.towardHalt > 0
+                ? `${worst.email} is the closest to stopping`
+                : 'Every mailbox is well under the line'}
+            </span>
+            <span className="flex w-32 shrink-0 items-center justify-end gap-2">
+              <Bar value={worst?.towardHalt ?? 0} danger={(worst?.towardHalt ?? 0) > 0.7} />
+              <span className="w-12 text-right tabular-nums text-dim">
+                {worst && worst.bounced > 0 ? asPercent(worst.bounceRate) : '0%'}
+              </span>
+            </span>
+          </div>
+          <p className="px-6 pb-6 pt-1 text-dim">
+            {health.total.toLocaleString()} can never be written to, {health.last7} added this week.
           </p>
         </section>
       </div>
@@ -1616,120 +1538,103 @@ async function ReportsSheet() {
  * A limit you discover by hitting it is a bad limit, so every field states its
  * bounds and why. The clamping itself is in lib/rules.ts beside the rules.
  */
+/**
+ * The rules, as five plain statements you can edit in place.
+ *
+ * A form of labelled boxes makes you assemble the meaning yourself. These read
+ * as the sentences they are — "send between 09:00 and 17:00" — so the setting
+ * and its consequence are the same thing on screen.
+ */
 async function SettingsSheet({ saved }: { saved: boolean }) {
   const rules = await tuning()
   const span = rules.windowEnd - rules.windowStart
+  const inline = 'mx-1 w-20 rounded-[4px] border border-line bg-raise px-2 py-1 text-center tabular-nums transition-colors focus:border-primary'
 
   return (
     <Sheet
       label="Settings"
       title="How hard to push"
-      note="Tighten these while a domain is warming. Bounded — tuning the rules is the point, turning them off is not."
+      note="Tighten these while a domain is warming. Every one is bounded — tuning the rules is the point, turning them off is not."
     >
-      {saved && <p className="shrink-0 border-b border-line bg-raise px-6 py-3">Saved.</p>}
+      {saved && <p className="shrink-0 bg-primary/[0.07] px-6 py-3 text-primary">Saved.</p>}
 
-      <form action={saveSettings} className="quiet-scroll min-h-0 flex-1 p-6">
-        {/* The window, drawn as the day it describes. */}
-        <div className="mb-6 flex flex-col gap-3">
-          <Label>Send between</Label>
-          <div className="flex items-center gap-3">
-            <input type="time" name="window_start" defaultValue={asClock(rules.windowStart)} className={`${field} w-32`} />
-            <span className="text-dim">to</span>
-            <input type="time" name="window_end" defaultValue={asClock(rules.windowEnd)} className={`${field} w-32`} />
-            <span className="text-dim">{(span / 60).toFixed(1)} hours a day</span>
-          </div>
-          {/* One bar, one day. The filled part is when mail may go. */}
-          <span className="relative flex h-2 w-full overflow-hidden rounded-full bg-line" aria-hidden>
+      <form action={saveSettings} className="quiet-scroll min-h-0 flex-1">
+        <div className="flex flex-col gap-6 p-6 text-body leading-[2.2]">
+          <p>
+            Send between
+            <input type="time" name="window_start" defaultValue={asClock(rules.windowStart)} className={inline} />
+            and
+            <input type="time" name="window_end" defaultValue={asClock(rules.windowEnd)} className={inline} />
+            <span className="ml-2 text-dim">
+              — {(span / 60).toFixed(1)} hours, released evenly so a backlog never goes out at once.
+            </span>
+          </p>
+
+          {/* The window as the day it describes. */}
+          <span className="relative -mt-4 flex h-1.5 w-full overflow-hidden rounded-full bg-line" aria-hidden>
             <span
               className="absolute inset-y-0 bg-primary"
-              style={{
-                left: `${(rules.windowStart / 1440) * 100}%`,
-                width: `${(span / 1440) * 100}%`,
-              }}
+              style={{ left: `${(rules.windowStart / 1440) * 100}%`, width: `${(span / 1440) * 100}%` }}
             />
           </span>
-          <span className="flex justify-between text-small text-dim">
-            <span>00:00</span>
-            <span>12:00</span>
-            <span>24:00</span>
-          </span>
-          <span className="text-dim">
-            The daily cap is released evenly across this, so a worker down all morning cannot catch
-            up at five. {asClock(LIMITS.windowStart[0])}–{asClock(LIMITS.windowEnd[1])} at the widest.
-          </span>
-        </div>
 
-        <div className="grid max-w-2xl gap-6 sm:grid-cols-2">
-          <label className="flex flex-col gap-2">
-            <Label>Stop a mailbox above</Label>
-            <span className="flex items-center gap-3">
-              <input
-                name="bounce_threshold"
-                type="number"
-                step="0.1"
-                min={LIMITS.bounceThreshold[0] / 100}
-                max={LIMITS.bounceThreshold[1] / 100}
-                defaultValue={(rules.bounceThreshold / 100).toFixed(1)}
-                className={`${field} w-24`}
-              />
-              <span className="text-dim">% bounces</span>
-              <Bar value={rules.bounceThreshold / LIMITS.bounceThreshold[1]} danger />
+          <p>
+            Stop a mailbox above
+            <input
+              name="bounce_threshold"
+              type="number"
+              step="0.1"
+              min={LIMITS.bounceThreshold[0] / 100}
+              max={LIMITS.bounceThreshold[1] / 100}
+              defaultValue={(rules.bounceThreshold / 100).toFixed(1)}
+              className={inline}
+            />
+            % bounces, but only after
+            <input
+              name="bounce_minimum"
+              type="number"
+              min={LIMITS.bounceMinimum[0]}
+              max={LIMITS.bounceMinimum[1]}
+              defaultValue={rules.bounceMinimum}
+              className={inline}
+            />
+            attempts.
+            <span className="ml-2 text-dim">
+              Below {LIMITS.bounceMinimum[0]} attempts a rate is noise; above{' '}
+              {LIMITS.bounceThreshold[1] / 100}% the domain is already in trouble.
             </span>
-            <span className="text-dim">
-              {LIMITS.bounceThreshold[0] / 100}–{LIMITS.bounceThreshold[1] / 100}%. Above that the
-              domain is already in trouble by the time anything stops.
-            </span>
-          </label>
+          </p>
 
-          <label className="flex flex-col gap-2">
-            <Label>Only after</Label>
-            <span className="flex items-center gap-3">
-              <input
-                name="bounce_minimum"
-                type="number"
-                min={LIMITS.bounceMinimum[0]}
-                max={LIMITS.bounceMinimum[1]}
-                defaultValue={rules.bounceMinimum}
-                className={`${field} w-24`}
-              />
-              <span className="text-dim">attempts</span>
-            </span>
-            <span className="text-dim">
-              Below {LIMITS.bounceMinimum[0]} a bounce rate is noise, so one bad address would stop
-              everything.
-            </span>
-          </label>
-
-          <label className="flex flex-col gap-2">
-            <Label>Catch-all a day</Label>
+          <p>
+            Send at most
             <input
               name="catch_all_cap"
               type="number"
               min={LIMITS.catchAllCap[0]}
               max={LIMITS.catchAllCap[1]}
               defaultValue={rules.catchAllCap}
-              className={`${field} w-24`}
+              className={inline}
             />
-            <span className="text-dim">
-              Per mailbox, and only from one flagged for them. Zero switches catch-all off.
-            </span>
-          </label>
+            catch-all addresses a day, per mailbox.
+            <span className="ml-2 text-dim">Zero switches them off entirely.</span>
+          </p>
 
-          <label className="flex flex-col gap-2">
-            <Label>Drafts per batch</Label>
+          <p>
+            Draft
             <input
               name="draft_batch"
               type="number"
               min={LIMITS.draftBatch[0]}
               max={LIMITS.draftBatch[1]}
               defaultValue={rules.draftBatch}
-              className={`${field} w-24`}
+              className={inline}
             />
-            <span className="text-dim">Each draft is one model call, so this is what a run costs.</span>
-          </label>
+            at a time.
+            <span className="ml-2 text-dim">Each one is a model call, so this is what a run costs.</span>
+          </p>
         </div>
 
-        <div className="mt-6 flex items-center gap-3">
+        <div className="flex items-center gap-3 px-6 pb-6">
           <button className={go}>Save</button>
           <span className="text-dim">Takes effect on the next send tick.</span>
         </div>
@@ -2088,9 +1993,6 @@ async function ReturnedSheet({ page }: { page: number }) {
             </select>
             <button className={ink}>Block</button>
           </form>
-          <Link href="/" className={quiet} aria-label="Close">
-            ✕
-          </Link>
         </>
       }
     >

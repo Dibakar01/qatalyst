@@ -53,17 +53,20 @@ export function Sheet({
   title,
   note,
   actions,
+  /** Where the exit goes. The desk unless a panel has somewhere nearer. */
+  closeHref = '/',
   children,
 }: {
   label: string
   title: React.ReactNode
   note?: React.ReactNode
   actions?: React.ReactNode
+  closeHref?: string
   children: React.ReactNode
 }) {
   return (
     <section className="panel grain relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[10px]">
-      <header className="flex shrink-0 items-end justify-between gap-4 border-b border-line p-6">
+      <header className="flex shrink-0 items-start justify-between gap-4 border-b border-line p-6">
         <div className="min-w-0">
           <Label>{label}</Label>
           <h1 className="mt-1.5 truncate text-title font-medium leading-[1.1] tracking-[-0.028em]">
@@ -71,7 +74,22 @@ export function Sheet({
           </h1>
           {note ? <p className="mt-1 text-dim">{note}</p> : null}
         </div>
-        {actions ? <div className="flex shrink-0 items-center gap-2 pb-1">{actions}</div> : null}
+
+        <div className="flex shrink-0 items-center gap-3">
+          {actions}
+          {/* The way out lives here rather than in each caller.
+              Eleven panels, and seven of them had forgotten one — which is
+              what happens when the exit is left to whoever writes the panel.
+              Same place on every surface, impossible to omit. */}
+          <Link
+            href={closeHref}
+            aria-label="Close"
+            title="Close · esc"
+            className="grid size-8 shrink-0 place-items-center rounded-full border border-line text-dim transition-[color,border-color,transform] hover:border-primary hover:text-primary active:scale-95"
+          >
+            ✕
+          </Link>
+        </div>
       </header>
       {children}
     </section>

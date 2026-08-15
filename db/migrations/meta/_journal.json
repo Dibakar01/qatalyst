@@ -43,6 +43,13 @@
       "when": 1786764629670,
       "tag": "0005_skinny_genesis",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786768112944,
+      "tag": "0006_exotic_ezekiel",
+      "breakpoints": true
     }
   ]
 }

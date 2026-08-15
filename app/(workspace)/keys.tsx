@@ -15,13 +15,25 @@ import { Fragment, useEffect } from 'react'
  * only gets them while it has focus, so they never fight a text field.
  */
 
+/**
+ * The number keys, in the strip's own left-to-right order.
+ *
+ * They used to cover five of seven destinations in a different order from the
+ * screen — `5` reached Reports, which sits sixth. A shortcut that contradicts
+ * what you can see is worse than no shortcut, so this list and the strip are
+ * the same list, and each pill now shows its number.
+ */
 const GOES = {
-  '1': '/',
+  '1': '/?as=list',
   '2': '/?view=book',
   '3': '/?view=sent',
   '4': '/?view=replies',
-  '5': '/?view=reports',
+  '5': '/?view=sources',
+  '6': '/?view=reports',
+  '7': '/?view=returned',
+  '0': '/',
   n: '/?new=1',
+  s: '/?view=settings',
 } as const
 
 /** True when the keystroke belongs to whatever the person is typing into. */
@@ -88,12 +100,10 @@ export function Shortcuts() {
             ['esc', 'back one layer'],
             ['↑ ↓', 'through the letters'],
             ['↵', 'open the letter'],
-            ['1', 'the desk'],
-            ['2', 'contacts'],
-            ['3', 'sent'],
-            ['4', 'replies'],
-            ['5', 'reports'],
+            ['0', 'the desk'],
+            ['1–7', 'along the strip'],
             ['n', 'new letter'],
+            ['s', 'settings'],
             ['⌘K', 'the command bar'],
           ] as const
         ).map(([key, does]) => (

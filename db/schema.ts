@@ -241,6 +241,13 @@ export const messages = pgTable(
   (t) => [
     uniqueIndex('messages_campaign_contact_key').on(t.campaignId, t.contactId),
     index('messages_message_id_header_idx').on(t.messageIdHeader),
+    // messages is the fastest-growing table and every report filters it by
+    // status. Without this the reports stay fast until they all get slow at
+    // once, which reads as the reports being broken rather than the schema.
+    index('messages_status_idx').on(t.status),
+    // The sender's queue is (status, campaign) and the daily counters are
+    // (mailbox, sent_at) — both hot paths on every tick.
+    index('messages_mailbox_sent_idx').on(t.mailboxId, t.sentAt),
   ],
 )
 
