@@ -121,11 +121,11 @@ void main() {
     base = uPrimary;
     float stamp = rect(vUv, vec2(0.805, 0.700), vec2(0.945, 0.925));
     float inner = rect(vUv, vec2(0.820, 0.717), vec2(0.930, 0.908));
-    float address =
-        rect(vUv, vec2(0.14, 0.425), vec2(0.62, 0.449))
-      + rect(vUv, vec2(0.14, 0.345), vec2(0.52, 0.369))
-      + rect(vUv, vec2(0.14, 0.265), vec2(0.40, 0.289));
-    float mark = clamp(stamp - inner + address * 0.92 + franking(vUv, uCode) * 0.95, 0.0, 1.0);
+    // No drawn address at all. It used to be three abstract bars standing in
+    // for text; the real name and status are now struck here in HTML, and
+    // leaving any of the bars in put a white rule straight through both lines.
+    // The franking stays — that is a barcode, not writing.
+    float mark = clamp(stamp - inner + franking(vUv, uCode) * 0.95, 0.0, 1.0);
     base = mix(base, uPaper, mark);
   } else if (vKind > 0.5) {
     // The sheet itself. Written on one side, blank on the other.
@@ -189,6 +189,15 @@ const W = 1.9
 const H = 1.0
 const D = 0.05
 const FLAP = 0.46
+/**
+ * Where the addressee is written, in uv — the left end of the name line, and
+ * the right end of it. Two points rather than one, because the distance
+ * between them on screen is what tells the label how big to be: text held at
+ * 15px while the object it names grows is the thing that reads as broken.
+ */
+const ADDRESS = [0.14, 0.437]
+const ADDRESS_END = [0.62, 0.437]
+
 /** Where the stamp sits on the face, in uv. The mark is pinned here. */
 const STAMP = [0.875, 0.812]
 
@@ -277,11 +286,33 @@ const project = (velocity: number, deceleration = 0.998) =>
 const rubberband = (overshoot: number, dimension = 1, constant = 0.55) =>
   (overshoot * dimension * constant) / (dimension + constant * Math.abs(overshoot))
 
+const clamp = (n: number, low: number, high: number) => Math.min(Math.max(n, low), high)
+
+/** How many dots the scrubber shows before it starts windowing. */
+const DOTS = 21
+
+/**
+ * The slice of the stack the scrubber draws.
+ *
+ * Everything up to `DOTS`; past that, a window centred on where you are and
+ * held inside the ends, so the dots stay a fixed height instead of growing
+ * with the stack and running off the stage.
+ */
+function window_<T>(all: T[], active: number) {
+  const start =
+    all.length <= DOTS ? 0 : clamp(active - (DOTS >> 1), 0, all.length - DOTS)
+  return all
+    .slice(start, start + Math.min(DOTS, all.length))
+    .map((card, i) => ({ card, index: start + i }))
+}
+
 export type Card = {
   id: string
   name: string
   /** 0 sealed, 1 fully drawn out. The share of this run that has been posted. */
   progress: number
+  /** Where this letter is in its life: draft, sending, paused, done. */
+  status: string
   /** What this letter needs next. */
   mark: string
   /** The number struck on the mark. Zero shows no number. */
@@ -312,6 +343,7 @@ export default function Letter({
   const router = useRouter()
   const canvas = useRef<HTMLCanvasElement>(null)
   const markEl = useRef<HTMLDivElement>(null)
+  const nameEl = useRef<HTMLDivElement>(null)
 
   const at = Math.max(
     cards.findIndex((card) => card.id === openId),
@@ -648,6 +680,12 @@ export default function Letter({
       gl!.clear(gl!.COLOR_BUFFER_BIT | gl!.DEPTH_BUFFER_BIT)
 
       let markScreen: { x: number; y: number; on: boolean } = { x: 0, y: 0, on: false }
+      let nameScreen: { x: number; y: number; w: number; on: boolean } = {
+        x: 0,
+        y: 0,
+        w: 0,
+        on: false,
+      }
       const first = Math.max(Math.round(shown) - NEIGHBOURS, 0)
       const lastCard = Math.min(Math.round(shown) + NEIGHBOURS, deck.length - 1)
 
@@ -702,11 +740,38 @@ export default function Letter({
             (normal[1] - model[13]) * (0 - world[1]) +
             (normal[2] - model[14]) * (back - world[2])
           // Nudged up and right of the stamp's centre, or the button covers
-          // the very mark it is pinned to.
+          // the very mark it is pinned to. Then held inside the stage: the
+          // projection happily puts it past the edge when the letter sits near
+          // one, and a control you cannot reach is worse than one out of place.
+          const pad = 56
           markScreen = {
-            x: (clip[0] / clip[3] / 2 + 0.5) * width + 18,
-            y: (0.5 - clip[1] / clip[3] / 2) * height - 16,
+            x: clamp((clip[0] / clip[3] / 2 + 0.5) * width + 18, pad, width - pad),
+            y: clamp((0.5 - clip[1] / clip[3] / 2) * height - 16, pad, height - pad),
             on: clip[3] > 0 && facing > 0 && unfold < 0.06,
+          }
+
+          // The name, struck on the address line. Both ends are projected so
+          // the label can be sized from the face rather than the viewport.
+          const at = (uv: number[]) =>
+            transformPoint(
+              multiply(projection, multiply(view, model)),
+              (uv[0] - 0.5) * W,
+              (uv[1] - 0.5) * H,
+              D / 2,
+            )
+          const a = at(ADDRESS)
+          const b = at(ADDRESS_END)
+          if (a[3] > 0 && b[3] > 0) {
+            const ax = (a[0] / a[3] / 2 + 0.5) * width
+            const bx = (b[0] / b[3] / 2 + 0.5) * width
+            nameScreen = {
+              x: ax,
+              y: (0.5 - a[1] / a[3] / 2) * height,
+              // The width of the address block on screen, which is the whole
+              // point of projecting two points instead of one.
+              w: Math.abs(bx - ax),
+              on: facing > 0 && unfold < 0.06,
+            }
           }
         }
       }
@@ -718,6 +783,20 @@ export default function Letter({
         node.style.transform = `translate3d(${markScreen.x}px, ${markScreen.y}px, 0) translate(-50%, -50%)`
         node.style.opacity = markScreen.on ? '1' : '0'
         node.style.pointerEvents = markScreen.on ? 'auto' : 'none'
+      }
+
+      // The name rides the address line: positioned, sized and faded from the
+      // face itself, so it turns away with the envelope instead of hanging in
+      // front of it.
+      const label = nameEl.current
+      if (label) {
+        label.style.transform = `translate3d(${nameScreen.x}px, ${nameScreen.y}px, 0)`
+        label.style.width = `${nameScreen.w}px`
+        // Tied to the block's own width, so the name grows with the letter.
+        // The floor keeps it legible when the stack stands back; the ceiling
+        // stops it shouting when the letter fills the stage.
+        label.style.fontSize = `${clamp(nameScreen.w * 0.088, 11, 30)}px`
+        label.style.opacity = nameScreen.on ? '1' : '0'
       }
     }
 
@@ -757,7 +836,9 @@ export default function Letter({
         role="button"
         aria-label={
           here
-            ? `${here.name}. Drag to turn it over, arrow keys to move through the stack, enter to open it.`
+            ? `${here.name}${here.status ? `, ${here.status.replace(/_/g, ' ')}` : ''}${
+                cards.length > 1 ? `. Letter ${active + 1} of ${cards.length}` : ''
+              }. Drag to turn it over, arrow keys to move through the stack, enter to open it.`
             : 'No letters yet'
         }
         style={{ cursor: 'grab' }}
@@ -777,19 +858,42 @@ export default function Letter({
         )}
       </div>
 
-      {/* Which letter you are looking at. The bars on its face are what tells
-          them apart at a glance; this is where you confirm which is which. */}
-      {here?.name && (
-        <p className="pointer-events-none absolute inset-x-0 bottom-0 truncate px-6 text-center font-medium">
-          {here.name}
+      {/* Which letter this is, written where an envelope carries its
+          addressee. It used to sit at the bottom of the screen — a caption
+          bar that stayed put while the letter turned, and went on bleeding out
+          from under any panel opened over it. Now it belongs to the object:
+          name first, then what it is doing, which is the order you read them. */}
+      <div
+        ref={nameEl}
+        aria-hidden
+        className="pointer-events-none absolute left-0 top-0 origin-top-left opacity-0 transition-opacity duration-200"
+      >
+        <p className="truncate font-medium leading-[1.15] tracking-[-0.02em] text-secondary">
+          {here?.name}
         </p>
-      )}
+        {here?.status && (
+          <p
+            className="truncate uppercase text-secondary opacity-75"
+            style={{ fontSize: '0.46em', marginTop: '0.5em', letterSpacing: '0.16em' }}
+          >
+            {here.status.replace(/_/g, ' ')}
+          </p>
+        )}
+      </div>
 
       {/* The scrubber runs down the right, because that is the axis the
           letters move on. */}
       {cards.length > 1 && (
-        <div className="absolute right-3 top-1/2 flex -translate-y-1/2 flex-col">
-          {cards.map((card, index) => (
+        <div className="absolute right-3 top-1/2 flex -translate-y-1/2 flex-col items-center">
+          {/* Past what fits, a window around where you are rather than every
+              letter — one 16px dot each ran off both ends of the stage at
+              around forty-five. The count says what the window is hiding. */}
+          {cards.length > DOTS && (
+            <span className="pb-1 text-micro tabular-nums text-dim">
+              {active + 1}/{cards.length}
+            </span>
+          )}
+          {window_(cards, active).map(({ card, index }) => (
             <button
               key={card.id}
               onClick={() => setActive(index)}

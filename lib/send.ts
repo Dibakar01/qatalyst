@@ -1,8 +1,8 @@
-import { and, eq, inArray, isNotNull, isNull, sql as raw } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull, lte, or, sql as raw } from 'drizzle-orm'
 import { db } from '../db/index.ts'
 import { campaigns, contacts, domains, events, mailboxes, messages } from '../db/schema.ts'
 import { deliver, isConfigured } from './gmail.ts'
-import { allowanceNow, daysSince, maySend, shouldHalt, warmupCap } from './rules.ts'
+import { afterFailure, allowanceNow, daysSince, maySend, shouldHalt, warmupCap } from './rules.ts'
 import { tuning } from './settings.ts'
 import { suppressionIndex } from './suppression.ts'
 
@@ -167,9 +167,15 @@ export async function sendTick(now = new Date()): Promise<TickResult> {
           // adapter and its own filter rather than sharing this queue.
           eq(campaigns.channel, 'email'),
           isNull(contacts.erasedAt),
+          // Nothing before its backoff has elapsed.
+          or(isNull(messages.nextAttemptAt), lte(messages.nextAttemptAt, now)),
         ),
       )
-      .orderBy(messages.error, messages.id)
+      // Fewest attempts first, so fresh work goes before anything that has
+      // already failed. This used to order by `error`, and Postgres sorts
+      // NULLs last on ASC — which put the failures at the *front* and let one
+      // undeliverable message block a mailbox indefinitely.
+      .orderBy(messages.attempts, messages.id)
       .limit(50)
 
     let sentHere = 0
@@ -218,8 +224,20 @@ export async function sendTick(now = new Date()): Promise<TickResult> {
         )
       } catch (cause) {
         const error = cause instanceof Error ? cause.message : String(cause)
-        await db.update(messages).set({ error }).where(eq(messages.id, message.id))
-        result.detail.push(`${contact.email}: ${error}`)
+        const next = afterFailure(message.attempts ?? 0, now)
+        await db
+          .update(messages)
+          .set({
+            error,
+            attempts: next.attempts,
+            nextAttemptAt: next.nextAttemptAt,
+            // Out of tries: hand it to a person rather than retry forever.
+            ...(next.giveUp ? { status: 'flagged' as const } : {}),
+          })
+          .where(eq(messages.id, message.id))
+        result.detail.push(
+          `${contact.email}: ${error}${next.giveUp ? ' — given up after 3 tries' : ` (retry ${next.attempts}/3)`}`,
+        )
       }
       break
     }

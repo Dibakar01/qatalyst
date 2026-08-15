@@ -7,7 +7,7 @@ process.env.UNSUBSCRIBE_SECRET = 'test-secret'
 const { makeToken, readToken, makeLink, readLink } = await import('./token.ts')
 const { mapRow } = await import('./csv.ts')
 const { assembleBody, fill, missing, variables } = await import('./template.ts')
-const { validate, claims, ungrounded } = await import('./validators.ts')
+const { validate, claims, ungrounded, spammy } = await import('./validators.ts')
 const { allowanceNow, batchSize, frankingCode, maySend, nextAction, shouldHalt, WINDOW } =
   await import('./rules.ts')
 const mat4 = await import('./mat4.ts')
@@ -171,6 +171,19 @@ test('a message only passes when both validators pass', () => {
   )
 })
 
+test('copy that reads as advertising is flagged before it is sent', () => {
+  assert.deepEqual(spammy('A note about your scheduling problem.'), [])
+  assert.ok(spammy('Book a FREE demo, no obligation!').includes('salesy'))
+  assert.ok(spammy('Act now — limited time.').includes('salesy'))
+  // One link is a person sharing something; several is a campaign.
+  assert.deepEqual(spammy('Here is the piece: https://a.com/x'), [])
+  assert.ok(spammy('See https://a.com and https://b.com').includes('links'))
+  assert.ok(spammy('THIS IS URGENT PLEASE READ RIGHT NOW OKAY').includes('shouting'))
+  assert.ok(spammy('Are you interested??').includes('shouting'))
+  // Acronyms are not shouting, and this is most of what B2B copy is made of.
+  assert.deepEqual(spammy('Your CTO mentioned the API and the SDK at PyCon this year.'), [])
+})
+
 /* sending rules ----------------------------------------------------------- */
 
 test('the daily cap is released across the window, never in a burst', () => {
@@ -202,6 +215,125 @@ test('a typed batch size can never run away with the model budget', () => {
   assert.equal(batchSize('40.5'), 25, 'half a draft is not a batch')
   assert.equal(batchSize('40'), 40)
   assert.equal(batchSize('500'), 100, 'the ceiling holds however big the ask')
+})
+
+/* reading the post that comes back ----------------------------------------- */
+
+const { answers, classify, isAutoReply, isBounce, isHardBounce } = await import('./replies.ts')
+const { afterFailure, MAX_ATTEMPTS } = await import('./rules.ts')
+
+test('a reply is matched even when it is deep in a thread', () => {
+  const ours = '<CADm@mail.gmail.com>'
+  // One exchange: our id is the direct parent.
+  assert.deepEqual(answers({ 'In-Reply-To': ours }), [ours])
+  // Three deep: our id survives only in References. Matching on In-Reply-To
+  // alone would silently miss every conversation longer than one exchange.
+  const deep = answers({
+    'In-Reply-To': '<later@example.com>',
+    References: `${ours} <mid@example.com> <later@example.com>`,
+  })
+  assert.ok(deep.includes(ours), 'the original must still be found')
+  assert.equal(deep.length, 4)
+  // Headers are case-insensitive in the wild.
+  assert.deepEqual(answers({ 'in-reply-to': ours }), [ours])
+  assert.deepEqual(answers({}), [])
+})
+
+test('a bounce is recognised however it is dressed', () => {
+  assert.ok(isBounce({ From: 'Mail Delivery Subsystem <mailer-daemon@googlemail.com>' }))
+  assert.ok(isBounce({ 'Content-Type': 'multipart/report; report-type=delivery-status' }))
+  assert.ok(isBounce({ Subject: 'Undeliverable: A quick question' }))
+  assert.ok(isBounce({ Subject: 'Delivery Status Notification (Failure)' }))
+  assert.ok(!isBounce({ From: 'ada@example.com', Subject: 'Re: A quick question' }))
+})
+
+test('permanent and temporary bounces are told apart', () => {
+  // They deserve opposite treatment: suppress forever, or try again later.
+  assert.equal(isHardBounce('550 5.1.1 The email account does not exist'), true)
+  assert.equal(isHardBounce('user unknown'), true)
+  assert.equal(isHardBounce('452 4.2.2 The recipient mailbox is full'), false)
+  assert.equal(isHardBounce('4.7.0 Try again later'), false)
+})
+
+test('an out-of-office is not a reply', () => {
+  // Counting these as engagement would corrupt the one number the system is
+  // judged on, and inflate it in exactly the cases that mean least.
+  assert.ok(isAutoReply({ 'Auto-Submitted': 'auto-replied' }))
+  assert.ok(isAutoReply({ Precedence: 'bulk' }))
+  assert.ok(isAutoReply({ Subject: 'Out of office until Monday' }))
+  assert.ok(isAutoReply({ Subject: 'Automatic reply: A quick question' }))
+  assert.ok(!isAutoReply({ Subject: 'Re: A quick question' }))
+  assert.ok(!isAutoReply({ 'Auto-Submitted': 'no' }))
+})
+
+test('a bounce is never read as engagement', () => {
+  const ours = '<abc@mail.gmail.com>'
+  // A Mailer-Daemon notification IS a reply to our message by threading, so
+  // order matters here: read it as a reply and the meaning inverts.
+  const bounce = classify(
+    { From: 'mailer-daemon@googlemail.com', Subject: 'Undeliverable', 'In-Reply-To': ours },
+    '550 5.1.1 no such user',
+  )
+  assert.equal(bounce.kind, 'bounce')
+  assert.equal(bounce.kind === 'bounce' && bounce.hard, true)
+
+  assert.equal(classify({ 'In-Reply-To': ours, Subject: 'Re: hello' }).kind, 'reply')
+  assert.equal(classify({ 'In-Reply-To': ours, Precedence: 'bulk' }).kind, 'auto')
+  // Mail that answers nothing of ours is none of our business.
+  assert.equal(classify({ Subject: 'Newsletter' }).kind, 'ignore')
+})
+
+test('a failing message backs off and is eventually given up on', () => {
+  const now = new Date('2026-08-15T12:00:00Z')
+  const first = afterFailure(0, now)
+  assert.equal(first.attempts, 1)
+  assert.equal(first.giveUp, false)
+  assert.ok(first.nextAttemptAt! > now, 'must wait before trying again')
+
+  const second = afterFailure(1, now)
+  assert.ok(
+    second.nextAttemptAt!.getTime() - now.getTime() >
+      first.nextAttemptAt!.getTime() - now.getTime(),
+    'each wait is longer than the last',
+  )
+
+  // The whole point: it stops. Before this, a bad message was retried every
+  // sixty seconds forever and blocked everything behind it.
+  const last = afterFailure(MAX_ATTEMPTS - 1, now)
+  assert.equal(last.giveUp, true)
+  assert.equal(last.nextAttemptAt, null)
+})
+
+/* is the domain allowed to send as itself? --------------------------------- */
+
+const { readDkim, readDmarc, readSpf } = await import('./authdns.ts')
+
+test('SPF is only accepted when it can actually fail someone', () => {
+  assert.equal(readSpf(['v=spf1 include:_spf.google.com ~all']).ok, true)
+  assert.equal(readSpf([]).ok, false)
+  // Softer than nothing: this authorises the entire internet to forge us.
+  assert.equal(readSpf(['v=spf1 include:_spf.google.com +all']).ok, false)
+  // A record with no all-qualifier never rejects anything, so it protects nothing.
+  assert.equal(readSpf(['v=spf1 include:_spf.google.com']).ok, false)
+  // Other TXT records at the apex must not be mistaken for SPF.
+  assert.equal(readSpf(['google-site-verification=abc']).ok, false)
+})
+
+test('an empty DKIM key is a revoked one, not a present one', () => {
+  assert.equal(readDkim(['v=DKIM1; k=rsa; p=MIIBIjANBg']).ok, true)
+  assert.equal(readDkim(['v=DKIM1; k=rsa; p=']).ok, false, 'p= alone revokes the key')
+  assert.equal(readDkim([]).ok, false)
+})
+
+test('DMARC passes when published, and says whether it is enforcing', () => {
+  assert.equal(readDmarc([]).ok, false)
+  // p=none satisfies the bulk-sender requirement while only monitoring, so it
+  // passes but must say so rather than look like full protection.
+  const monitoring = readDmarc(['v=DMARC1; p=none; rua=mailto:a@b.com'])
+  assert.equal(monitoring.ok, true)
+  assert.match(monitoring.note, /monitoring/i)
+  assert.match(readDmarc(['v=DMARC1; p=reject']).note, /enforcing/i)
+  assert.equal(readDmarc(['v=DMARC1; rua=mailto:a@b.com']).ok, false, 'no policy is no protection')
 })
 
 /* how sure are we, actually ------------------------------------------------ */

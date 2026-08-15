@@ -72,6 +72,8 @@ export default async function Login({ searchParams }: PageProps<'/login'>) {
                   id: 'sealed',
                   name: '',
                   progress: 0,
+                  // Nothing written on it until you are in.
+                  status: '',
                   mark: '',
                   count: 0,
                   markHref: '',

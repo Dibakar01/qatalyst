@@ -1,6 +1,6 @@
 import type { Contact } from '../db/schema.ts'
 
-export type Flag = 'ungrounded' | 'thin'
+export type Flag = 'ungrounded' | 'thin' | 'salesy' | 'links' | 'shouting'
 
 type Subject = Pick<Contact, 'firstName' | 'lastName' | 'company' | 'title' | 'context'>
 
@@ -90,9 +90,60 @@ export function substance(text: string, contact: Subject) {
 }
 
 /** Both validators. A message can only reach `approved` with an empty result. */
+/**
+ * The words that get mail filtered.
+ *
+ * Deliberately short. A long list flags every honest sentence and trains people
+ * to ignore the warning, which costs more than it saves — these are the ones
+ * that read as advertising rather than as a person writing.
+ */
+const SPAM = [
+  /\bfree\s+(trial|demo|consultation)\b/i,
+  /\bact\s+now\b/i,
+  /\blimited\s+time\b/i,
+  /\bno\s+obligation\b/i,
+  /\bguarantee[ds]?\b/i,
+  /\brisk[- ]free\b/i,
+  /\bclick\s+here\b/i,
+  /\b100%\b/,
+  /\bcheapest\b/i,
+  /\bbest\s+price\b/i,
+]
+
+/**
+ * What would send this to spam, on the text itself.
+ *
+ * Runs beside the two validators that were already here rather than as a
+ * separate surface, so a draft has one verdict rather than three.
+ */
+export function spammy(text: string): Flag[] {
+  const flags: Flag[] = []
+
+  if (SPAM.some((pattern) => pattern.test(text))) flags.push('salesy')
+
+  // More than one link in a first touch reads as a campaign, not a note. The
+  // opt-out link is added after this runs, so it is not counted here.
+  if ((text.match(/https?:\/\//g) ?? []).length > 1) flags.push('links')
+
+  // Shouting. Measured on words rather than characters so an acronym like CTO
+  // or API does not trip it.
+  // Only words of four letters or more, which is what keeps CTO, API and SDK
+  // out of it — and is why the floor below can be low enough to catch a short
+  // shouted line without flagging ordinary B2B copy.
+  const words = text.split(/\s+/).filter((w) => /[A-Za-z]{4,}/.test(w))
+  const shouted = words.filter((w) => w === w.toUpperCase())
+  if (words.length >= 5 && shouted.length / words.length > 0.2) flags.push('shouting')
+
+  // Punctuation that reads as a advert rather than a person.
+  if (/!{2,}|\?{2,}/.test(text)) flags.push('shouting')
+
+  return [...new Set(flags)]
+}
+
 export function validate(personalised: string, contact: Subject): Flag[] {
   const flags: Flag[] = []
   if (ungrounded(personalised, contact).length > 0) flags.push('ungrounded')
   if (substance(personalised, contact).size < SUBSTANCE_MINIMUM) flags.push('thin')
-  return flags
+  flags.push(...spammy(personalised))
+  return [...new Set(flags)]
 }

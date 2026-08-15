@@ -1,5 +1,5 @@
 import type { LetterRow, MailboxRow, SourceRow } from './reports.ts'
-import type { Tuning } from './rules.ts'
+import { LIMITS, type Tuning } from './rules.ts'
 import { interval, readable, sendsNeeded, separates } from './stats.ts'
 
 /**
@@ -26,6 +26,15 @@ export type Advice = {
   why: string
   /** A one-click fix, when there is an honest one. */
   fix?: { label: string; href: string }
+  /**
+   * A tuning change this advice would make, applied by one button.
+   *
+   * Every fix used to be a navigation link — you were told what was wrong and
+   * then left to find the setting yourself, which is why the tuning advice
+   * appeared to do nothing. `from` and `to` are both shown, so pressing it is
+   * never a mystery.
+   */
+  apply?: { label: string; setting: keyof Required<Tuning>; from: number; to: number; unit?: string }
 }
 
 /**
@@ -86,6 +95,19 @@ export function advise(input: {
     })
   }
 
+  // Too many drafts flagged means the batch is outrunning the reading. Lower
+  // it rather than let a backlog build that nobody gets through.
+  const totalFlagged = letters.reduce((t, l) => t + l.flagged, 0)
+  if (totalFlagged >= tuning.draftBatch * 2 && tuning.draftBatch > LIMITS.draftBatch[0]) {
+    const to = Math.max(Math.floor(tuning.draftBatch / 2), LIMITS.draftBatch[0])
+    out.push({
+      level: 'urgent',
+      title: `${totalFlagged} drafts are waiting to be read`,
+      why: `That is more than two full batches. Drafting faster than you read them only grows the pile — smaller batches get through it.`,
+      apply: { label: 'Halve the batch', setting: 'draftBatch', from: tuning.draftBatch, to },
+    })
+  }
+
   // A prompt that invents things. Flag rate is the only direct read on prompt
   // quality anywhere in the system.
   for (const letter of letters) {
@@ -133,6 +155,25 @@ export function advise(input: {
         })
       }
     }
+  }
+
+  // Bouncing near the line, on a real sample. Tightening the threshold stops
+  // the next mailbox before it gets there rather than after.
+  const risky = mailboxes.filter((m) => !m.halted && m.towardHalt >= 0.7)
+  if (risky.length >= 2 && tuning.bounceThreshold > LIMITS.bounceThreshold[0]) {
+    const to = Math.max(Math.round(tuning.bounceThreshold * 0.75), LIMITS.bounceThreshold[0])
+    out.push({
+      level: 'idea',
+      title: `${risky.length} mailboxes are close to the bounce line`,
+      why: `More than one at once is the list, not the mailbox. A tighter line halts the next one earlier, before the damage rather than after.`,
+      apply: {
+        label: 'Tighten the line',
+        setting: 'bounceThreshold',
+        from: tuning.bounceThreshold,
+        to,
+        unit: '%',
+      },
+    })
   }
 
   // A source that imports a lot and produces nothing sendable is the most

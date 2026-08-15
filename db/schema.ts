@@ -245,6 +245,17 @@ export const messages = pgTable(
     // cannot be matched back to what we sent (phase 4).
     messageIdHeader: text('message_id_header'),
     error: text('error'),
+    /**
+     * How many times delivery has been tried.
+     *
+     * Without this a failed send stayed `approved` with only an error recorded,
+     * and the queue ordered errored rows first — so one undeliverable message
+     * was retried every sixty seconds forever and nothing else on that mailbox
+     * ever went out. Counted so it can back off and eventually give up.
+     */
+    attempts: integer('attempts').notNull().default(0),
+    /** Earliest next try. Null means now. */
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }),
     sentAt: timestamp('sent_at', { withTimezone: true }),
   },
   (t) => [

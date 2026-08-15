@@ -296,6 +296,35 @@ export async function saveSettings(formData: FormData) {
   redirect('/?view=settings&saved=1')
 }
 
+/**
+ * Apply one piece of advice.
+ *
+ * Only the six tunable settings, and `saveTuning` clamps every one of them —
+ * so the worst a bad form post can do is set a legal value. Tuning the rules
+ * is the point; being able to turn them off is not.
+ */
+export async function applyAdvice(formData: FormData) {
+  await requireAuth()
+  const setting = field(formData, 'setting')
+  const to = Number(field(formData, 'to'))
+
+  const ALLOWED = [
+    'draftBatch',
+    'bounceThreshold',
+    'catchAllCap',
+    'bounceMinimum',
+    'windowStart',
+    'windowEnd',
+  ]
+  if (!ALLOWED.includes(setting) || !Number.isFinite(to)) {
+    redirect('/?view=reports&said=' + encodeURIComponent('That is not a setting I can change.'))
+  }
+
+  await saveTuning({ [setting]: to })
+  refresh()
+  redirect('/?view=reports&applied=' + encodeURIComponent(setting))
+}
+
 /* domains ----------------------------------------------------------------- */
 
 /**

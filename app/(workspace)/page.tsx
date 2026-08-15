@@ -20,6 +20,7 @@ import { byLetter, byMailbox, bySource, listHealth } from '@/lib/reports'
 import { asClock, tuning } from '@/lib/settings'
 import { advise } from '@/lib/advice'
 import { interval, readable } from '@/lib/stats'
+import { checkDomain } from '@/lib/authdns'
 import { listDomains } from '@/lib/domains'
 import { audienceOf, listSegments, stageCounts } from '@/lib/segments'
 import { STAGES } from '@/db/schema'
@@ -44,6 +45,7 @@ import {
   removeSource,
   runSourceAction,
   saveCampaignAction,
+  applyAdvice,
   saveSettings,
   saveStatus,
   startSending,
@@ -177,6 +179,7 @@ export default async function Desk({ searchParams }: PageProps<'/'>) {
       // Signing lifts the flap; posting draws the sheet out. The object is the
       // progress bar, so there does not have to be one.
       progress: written > 0 ? (approved * 0.35 + sent) / written : 0,
+      status: campaign.status,
       mark: next.label,
       count: next.count,
       markHref: `/?c=${campaign.id}&step=${STEP_FOR[next.action]}`,
@@ -1402,6 +1405,10 @@ function Bar({ value, danger }: { value: number; danger?: boolean }) {
   )
 }
 
+/** A tuning value as a person reads it. Basis points are not a unit anyone thinks in. */
+const fmtSetting = (n: number, unit?: string) =>
+  unit === '%' ? `${(n / 100).toFixed(2)}%` : n.toLocaleString()
+
 async function ReportsSheet() {
   const rules = await tuning()
   const [sources, boxes, letters, health] = await Promise.all([
@@ -1447,7 +1454,26 @@ async function ReportsSheet() {
                 {note.title}
               </span>
               {note.level === 'acted' && <Stamp tone="none">done for you</Stamp>}
-              {note.fix && (
+
+              {/* The button that actually does it. Every fix used to be a link
+                  to go and find the setting yourself, which is why the tuning
+                  advice looked like it did nothing. Both values are shown, so
+                  pressing it is never a leap of faith. */}
+              {note.apply && (
+                <form action={applyAdvice} className="ml-auto flex shrink-0 items-center gap-2">
+                  <input type="hidden" name="setting" value={note.apply.setting} />
+                  <input type="hidden" name="to" value={note.apply.to} />
+                  <span className="text-dim tabular-nums">
+                    {fmtSetting(note.apply.from, note.apply.unit)} →{' '}
+                    <span className="text-ink">{fmtSetting(note.apply.to, note.apply.unit)}</span>
+                  </span>
+                  <button className="rounded-full border border-primary px-3 py-1.5 text-primary transition-colors hover:bg-primary hover:text-secondary">
+                    {note.apply.label}
+                  </button>
+                </form>
+              )}
+
+              {note.fix && !note.apply && (
                 <Link href={note.fix.href} className="ml-auto shrink-0 text-primary underline-offset-4 hover:underline">
                   {note.fix.label} →
                 </Link>
@@ -1924,6 +1950,14 @@ async function RepliesSheet({ page }: { page: number }) {
  */
 async function BoxesSheet({ boxes }: { boxes: Box[] }) {
   const domains = await listDomains()
+  // Whether each domain is actually allowed to send as itself. This is the
+  // largest single factor in whether cold mail lands, and nothing checked it —
+  // a perfectly warmed, perfectly paced domain still goes to spam without it.
+  const auth = new Map(
+    await Promise.all(
+      domains.map(async (d) => [d.name, await checkDomain(d.name)] as const),
+    ),
+  )
   // What could go out, and what actually can. Saying only the second reads as
   // broken when the ramp is working fine and a key is simply missing.
   const ready = domains.filter((d) => d.active)
@@ -1967,6 +2001,7 @@ async function BoxesSheet({ boxes }: { boxes: Box[] }) {
 
                 {!domain.connected && <Stamp tone="flagged">no key</Stamp>}
                 {!domain.active && <Stamp tone="paused">paused</Stamp>}
+                {auth.get(domain.name)?.ok === false && <Stamp tone="flagged">dns</Stamp>}
                 {/* Warming is about the domain's age, not its credential —
                     a domain with no key yet is still on day n of its ramp. */}
                 {warming && (
@@ -1981,6 +2016,25 @@ async function BoxesSheet({ boxes }: { boxes: Box[] }) {
                     {domain.todayCap}/day now
                   </span>
                 </span>
+
+                {/* SPF, DKIM, DMARC — named individually, because "DNS is
+                    wrong" sends you hunting and "no DMARC record" does not. */}
+                <div className="flex w-full flex-wrap gap-x-6 gap-y-1 pl-[52px] text-small">
+                  {(['spf', 'dkim', 'dmarc'] as const).map((which) => {
+                    const check = auth.get(domain.name)?.[which]
+                    if (!check) return null
+                    return (
+                      <span
+                        key={which}
+                        className={check.ok ? 'text-dim' : 'text-primary'}
+                        title={check.note}
+                      >
+                        {check.ok ? '✓' : '✗'} {which.toUpperCase()}
+                        {!check.ok && <span className="pl-2 opacity-80">{check.note}</span>}
+                      </span>
+                    )
+                  })}
+                </div>
 
                 <form action={warmDomain}>
                   <input type="hidden" name="id" value={domain.id} />

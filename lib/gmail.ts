@@ -2,7 +2,19 @@ import { createSign } from 'node:crypto'
 import { credentialFor } from './domains.ts'
 import { isSuppressed } from './suppression.ts'
 
-const SCOPE = 'https://www.googleapis.com/auth/gmail.send'
+/**
+ * Sending, and reading back.
+ *
+ * `gmail.send` alone is why this system could never tell whether anything
+ * worked: nothing wrote a bounce, so the halt rule could not fire, and nothing
+ * wrote a reply, so the reply rate was structurally zero. Reading the mailbox
+ * is what closes that.
+ *
+ * `gmail.readonly` must be added to the existing client ID under Workspace
+ * Admin → Security → API controls → Domain-wide delegation. Until it is, the
+ * read pass fails its token request and says so rather than changing anything.
+ */
+const SCOPE = 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly'
 const TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me/messages'
 
@@ -34,6 +46,12 @@ const b64url = (input: string | Buffer) =>
  * One service account impersonates every mailbox, so there is no per-mailbox
  * OAuth dance and no refresh tokens to store. `sub` is the mailbox we send as.
  */
+export async function tokenFor(mailbox: string, credentialKey?: string | null) {
+  const account = credentials(credentialKey)
+  if (!account) return null
+  return accessToken(account, mailbox)
+}
+
 async function accessToken(account: ServiceAccount, mailbox: string) {
   const now = Math.floor(Date.now() / 1000)
   const claims = {

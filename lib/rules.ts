@@ -163,6 +163,36 @@ export function nextAction(
   return { label: tally.sent > 0 ? 'all posted' : 'nobody to write to', action: 'none', count: 0 }
 }
 
+/* ── when a send fails ────────────────────────────────────────────────────── */
+
+/** Tries before a message is given up on and handed back to a person. */
+export const MAX_ATTEMPTS = 3
+
+/**
+ * What to do with a delivery that just failed.
+ *
+ * The queue used to leave it `approved` with an error recorded, and ordered
+ * errored rows first — so an undeliverable message was retried every tick
+ * forever and nothing else on that mailbox ever went out. A silent, total
+ * stall that looked like the sender having nothing to do.
+ *
+ * Backoff is minutes, not seconds: the failures worth retrying are transient
+ * Gmail errors and rate limits, and hammering either is how a mailbox earns a
+ * longer ban. Three tries spans about half an hour, after which a person is a
+ * better judge than another retry.
+ */
+export function afterFailure(attempts: number, now = new Date()) {
+  const tried = attempts + 1
+  if (tried >= MAX_ATTEMPTS) return { attempts: tried, giveUp: true, nextAttemptAt: null }
+  // 5 minutes, then 25.
+  const wait = 5 * 60_000 * Math.pow(5, tried - 1)
+  return {
+    attempts: tried,
+    giveUp: false,
+    nextAttemptAt: new Date(now.getTime() + wait),
+  }
+}
+
 /* ── warming a domain ─────────────────────────────────────────────────────── */
 
 /** A new domain starts here, however big its mailbox caps are. */

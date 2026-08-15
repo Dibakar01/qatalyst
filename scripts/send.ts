@@ -4,6 +4,7 @@ import { and, eq, isNull, lt, or } from 'drizzle-orm'
 import { db, sql } from '../db/index.ts'
 import { connectors } from '../db/schema.ts'
 import { WINDOW } from '../lib/rules.ts'
+import { readTick } from '../lib/inbox.ts'
 import { sendTick } from '../lib/send.ts'
 import { canPull, runSource } from '../lib/sources.ts'
 
@@ -57,6 +58,18 @@ console.log(
 while (!stopping) {
   try {
     await pullDue()
+
+    // Read before sending. What came back changes what may go out — a bounce
+    // can halt a mailbox, and a reply must stop the follow-up — so listening
+    // first means this tick acts on the freshest possible picture.
+    const post = await readTick()
+    for (const line of post.detail) console.log(`${clock()}  ${line}`)
+    if (post.replied > 0 || post.bounced > 0) {
+      console.log(
+        `${clock()}  read ${post.read}: ${post.replied} replied, ${post.bounced} bounced${post.auto > 0 ? `, ${post.auto} auto` : ''}`,
+      )
+    }
+
     const tick = await sendTick()
     for (const line of tick.detail) console.log(`${clock()}  ${line}`)
     if (tick.halted.length > 0) {

@@ -103,6 +103,15 @@ export function audienceWhere(segments: string[], stages: string[]) {
   return and(
     inArray(contacts.emailStatus, SENDABLE),
     isNull(contacts.erasedAt),
+    // Never write to somebody who already answered, and never to an address
+    // that has hard-bounced. Writing again to a person who replied is the
+    // worst thing an outbound system can do — it tells them plainly that
+    // nobody read it. This was impossible to enforce until the inbox was
+    // being read, because nothing ever recorded either state.
+    raw`not exists (
+      select 1 from messages m
+      where m.contact_id = ${contacts.id} and m.status in ('replied', 'bounced')
+    )`,
     segments.length > 0 ? raw`${contacts.segments} && ARRAY[${list(segments)}]::text[]` : undefined,
     stages.length > 0 ? raw`${contacts.stage}::text = ANY(ARRAY[${list(stages)}]::text[])` : undefined,
   )
