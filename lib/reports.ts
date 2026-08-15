@@ -47,6 +47,9 @@ export async function bySource(): Promise<SourceRow[]> {
     sent: number
     clicked: number
     enquired: number
+    signed_up: number
+    subscribed: number
+    revenue: number
     days_to_first: number | null
   }>(raw`
     select
@@ -59,11 +62,18 @@ export async function bySource(): Promise<SourceRow[]> {
       count(distinct m.id) filter (where m.status in ('sent','bounced','replied')) as sent,
       count(distinct e.id) filter (where e.type = 'click')                   as clicked,
       count(distinct q.id)                                                   as enquired,
+      -- The funnel did not end at an enquiry, but this report did: conversions
+      -- were counted in a separate table on the same sheet, so "is this source
+      -- producing revenue" had no answer in the place that ranks sources.
+      count(distinct v.id) filter (where v.event = 'signed_up')              as signed_up,
+      count(distinct v.id) filter (where v.event = 'subscribed')             as subscribed,
+      coalesce(sum(v.value) filter (where v.event = 'subscribed'), 0)        as revenue,
       extract(day from min(q.created_at) - min(m.sent_at))                   as days_to_first
     from contacts c
-    left join messages  m on m.contact_id = c.id
-    left join events    e on e.contact_id = c.id
-    left join enquiries q on q.contact_id = c.id
+    left join messages    m on m.contact_id = c.id
+    left join events      e on e.contact_id = c.id
+    left join enquiries   q on q.contact_id = c.id
+    left join conversions v on v.contact_id = c.id
     group by 1
     order by count(distinct c.id) desc
   `)
@@ -76,7 +86,14 @@ export async function bySource(): Promise<SourceRow[]> {
     sent: Number(r.sent),
     clicked: Number(r.clicked),
     enquired: Number(r.enquired),
+    signedUp: Number(r.signed_up),
+    subscribed: Number(r.subscribed),
+    revenue: Number(r.revenue),
     yieldPerThousand: pct(Number(r.enquired), Number(r.sent)) * 1000,
+    // What a thousand sends from this source is actually worth. The number the
+    // report exists for, and the only one that compares a paid list against a
+    // free one on the same terms.
+    revenuePerThousand: Number(r.sent) > 0 ? (Number(r.revenue) / Number(r.sent)) * 1000 : 0,
     daysToFirst: r.days_to_first === null ? null : Number(r.days_to_first),
   }))
 }

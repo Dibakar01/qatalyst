@@ -2,6 +2,7 @@ import { and, count, desc, eq, isNotNull, sql as raw } from 'drizzle-orm'
 import { db } from '../db/index.ts'
 import { campaigns, contacts, conversions, enquiries, events, messages } from '../db/schema.ts'
 import { isValidEmail, normalise } from './email.ts'
+import { attribute } from './attribute.ts'
 import { advance } from './segments.ts'
 import type { Trace } from './token.ts'
 
@@ -28,15 +29,35 @@ async function messageFor({ contactId, campaignId }: Trace) {
   return row?.id ?? null
 }
 
+/**
+ * Record the click and say where the reader should land.
+ *
+ * One round trip for both: the redirect is a person waiting on a blank tab, so
+ * the destination arrives with the message it is being recorded against rather
+ * than in a second query afterwards.
+ *
+ * Null destination means the built-in enquiry form, which is what every letter
+ * written before campaigns had a destination will return.
+ */
 export async function recordClick(trace: Trace) {
-  const messageId = await messageFor(trace)
+  const [row] = await db
+    .select({ id: messages.id, destination: campaigns.destinationUrl })
+    .from(messages)
+    .innerJoin(campaigns, eq(campaigns.id, messages.campaignId))
+    .where(and(eq(messages.campaignId, trace.campaignId), eq(messages.contactId, trace.contactId)))
+    .limit(1)
+
   await db.insert(events).values({
     contactId: trace.contactId,
-    messageId,
+    messageId: row?.id ?? null,
     type: 'click',
     payload: { campaignId: trace.campaignId },
   })
+
+  return row?.destination ?? null
 }
+
+
 
 export type NewEnquiry = {
   email: string
@@ -141,46 +162,59 @@ export type ConversionEvent = 'visited' | 'signed_up' | 'subscribed'
  * cross-domain navigation, and a subscription that arrives three months after
  * the email.
  *
- * Matching is by address, which is the only durable key across two systems —
- * and it is why the tracked link carries a token but does not need to: someone
- * who forwards the email to a colleague who then signs up is attributed to the
- * colleague, correctly.
+ * Two ways in, one rule. A server-to-server call knows the address; the pixel
+ * knows the signed click id. Either identifies a conversion, and when both are
+ * present `attribute()` decides — the token names the campaign, the address
+ * names the person.
+ *
+ * The precedence lives in lib/attribute.ts rather than here, and this is the
+ * only place that writes a conversion, so no caller can route around it.
  */
 export async function recordConversion(input: {
-  email: string
+  email?: string | null
+  /** The signed click id from a tracked link, if the pixel had one. */
+  trace?: Trace | null
   event: ConversionEvent
+  /** The caller's id for this transaction — an invoice number is the natural one. */
+  eventId?: string | null
   value?: number | null
   currency?: string | null
   at?: Date
 }) {
-  const email = normalise(input.email)
-  if (!isValidEmail(email)) throw new Error('a valid email address is required')
+  const email = input.email ? normalise(input.email) : ''
+  if (email && !isValidEmail(email)) throw new Error('that is not a valid email address')
+  // One or the other. Without either there is nobody to attribute this to, and
+  // a conversion attached to nobody is a row that can only mislead.
+  if (!email && !input.trace) throw new Error('an email address or a click id is required')
 
-  const [contact] = await db
-    .select({ id: contacts.id })
-    .from(contacts)
-    .where(eq(contacts.email, email))
-    .limit(1)
+  const [known] = email
+    ? await db.select({ id: contacts.id }).from(contacts).where(eq(contacts.email, email)).limit(1)
+    : []
 
-  // The most recent thing we sent them is what gets the credit. Last-touch,
-  // stated plainly rather than dressed up as a model — with one letter per
-  // person per campaign there is rarely anything to argue about.
-  const [last] = contact
+  // Last-touch: the most recent thing we actually sent whoever this is. A
+  // default rather than a claim, and the token overrules it when there is one.
+  const who = known?.id ?? input.trace?.contactId ?? null
+  const [last] = who
     ? await db
         .select({ id: messages.id, campaignId: messages.campaignId })
         .from(messages)
-        .where(and(eq(messages.contactId, contact.id), isNotNull(messages.sentAt)))
+        .where(and(eq(messages.contactId, who), isNotNull(messages.sentAt)))
         .orderBy(desc(messages.sentAt))
         .limit(1)
     : []
 
+  const credit = attribute(input.trace, known?.id ?? null, last)
+  const contact = credit.contactId ? { id: credit.contactId } : undefined
+
   const [row] = await db
     .insert(conversions)
     .values({
-      contactId: contact?.id ?? null,
-      campaignId: last?.campaignId ?? null,
-      messageId: last?.id ?? null,
+      contactId: credit.contactId,
+      campaignId: credit.campaignId,
+      messageId: credit.messageId,
       event: input.event,
+      // Empty, never null — the unique key depends on it.
+      eventId: input.eventId ?? '',
       value: input.value ?? null,
       currency: input.currency ?? null,
       ...(input.at ? { createdAt: input.at } : {}),
@@ -194,7 +228,13 @@ export async function recordConversion(input: {
   // should not need a person to type it in.
   if (contact && input.event === 'subscribed') await advance(contact.id, 'customer')
 
-  return { recorded: Boolean(row), attributed: Boolean(last), contact: Boolean(contact) }
+  return {
+    recorded: Boolean(row),
+    attributed: Boolean(credit.campaignId),
+    contact: Boolean(credit.contactId),
+    basis: credit.basis,
+    forwarded: credit.forwarded,
+  }
 }
 
 /** The funnel, end to end, for the reports. */

@@ -52,6 +52,10 @@ export async function POST(req: Request) {
     const result = await recordConversion({
       email: String(body.email ?? ''),
       event: event as ConversionEvent,
+      // A subscription is a transaction, not a funnel step: send your invoice
+      // number and a renewal counts as revenue rather than being discarded as
+      // a duplicate. Omit it and this dedupes on (contact, event) as before.
+      eventId: body.event_id ? String(body.event_id) : null,
       value,
       currency: body.currency ? String(body.currency) : null,
       at: body.at ? new Date(String(body.at)) : undefined,

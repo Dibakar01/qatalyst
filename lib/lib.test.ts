@@ -269,6 +269,90 @@ test('practice survives a save, and is only ever a boolean', () => {
   assert.equal(clampTuning({ practice: 'no' }, SAFE).practice, false)
 })
 
+/* who gets the credit ------------------------------------------------------- */
+
+const { attribute } = await import('./attribute.ts')
+const { parseOrigins, originAllowed } = await import('./origins.ts')
+
+const ADA = '11111111-1111-1111-1111-111111111111'
+const BOB = '22222222-2222-2222-2222-222222222222'
+const LETTER = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+const NEWER = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+
+test('the token names the campaign and the address names the person', () => {
+  // The forward: Ada got the letter, sent it to Bob, Bob signed up. Both
+  // halves are true — Bob is the customer, Ada's letter produced him.
+  const a = attribute({ contactId: ADA, campaignId: LETTER }, BOB, {
+    id: 'm1',
+    campaignId: NEWER,
+  })
+  assert.equal(a.contactId, BOB, 'the person is whoever the address belongs to')
+  assert.equal(a.campaignId, LETTER, 'the campaign is whatever was clicked')
+  assert.equal(a.forwarded, true, 'and we can see that it was forwarded')
+})
+
+test('a clicked link beats last-touch on the campaign', () => {
+  // Cold outbound runs intro → nudge → revive over a quarter, so a click on
+  // letter one routinely arrives after letter three went out. Last-touch would
+  // credit the newest send; the click is evidence about a specific letter.
+  const a = attribute({ contactId: ADA, campaignId: LETTER }, ADA, {
+    id: 'm9',
+    campaignId: NEWER,
+  })
+  assert.equal(a.campaignId, LETTER, 'the specific evidence wins')
+  assert.equal(a.basis, 'click', 'and it says so rather than implying it')
+  assert.equal(a.forwarded, false, 'same person, so no forward')
+})
+
+test('without a click id it falls back to the last thing we sent', () => {
+  const a = attribute(null, ADA, { id: 'm1', campaignId: NEWER })
+  assert.equal(a.campaignId, NEWER, 'last-touch is the default')
+  assert.equal(a.basis, 'last-touch', 'stated as a model, not as a fact')
+  assert.equal(a.messageId, 'm1', 'and points at the send it credited')
+})
+
+test('a stranger converting is kept, not discarded', () => {
+  // Somebody who was never on the list is arguably the better outcome, and a
+  // conversion we cannot attribute is still revenue that happened.
+  const a = attribute(null, null, null)
+  assert.equal(a.contactId, null, 'nobody we know')
+  assert.equal(a.campaignId, null, 'nothing to credit')
+  assert.equal(a.basis, 'none', 'and it does not pretend otherwise')
+  assert.equal(a.forwarded, false, 'an unknown address is not a forward')
+})
+
+test('a click id alone is enough to attribute', () => {
+  // The pixel often has no address — the visit happens before any form.
+  const a = attribute({ contactId: ADA, campaignId: LETTER }, null, null)
+  assert.equal(a.contactId, ADA, 'the token names who we mailed')
+  assert.equal(a.campaignId, LETTER, 'and which letter')
+  assert.equal(a.basis, 'click', 'on the strength of the signature')
+})
+
+/* which sites may report ---------------------------------------------------- */
+
+test('the origin allowlist is parsed forgivingly and matched strictly', () => {
+  // The failure mode is silent: a stray space rejects every event, and the
+  // pixel is built never to complain.
+  const list = parseOrigins(' https://qalakaar.com , HTTPS://App.Example.com/ ')
+  assert.deepEqual(list, ['https://qalakaar.com', 'https://app.example.com'], 'trimmed and lowercased')
+
+  assert.equal(originAllowed('https://qalakaar.com', list), true, 'exact match')
+  assert.equal(originAllowed('https://app.example.com', list), true, 'case and slash normalised')
+  assert.equal(originAllowed('https://evil.com', list), false, 'anything else is refused')
+  assert.equal(originAllowed('http://qalakaar.com', list), false, 'a different scheme is a different origin')
+  assert.equal(originAllowed('https://qalakaar.com.evil.com', list), false, 'no suffix trickery')
+})
+
+test('an unset allowlist allows nothing', () => {
+  // An unset variable meaning "everyone" would turn a missed deployment step
+  // into an open endpoint that writes to the conversions table.
+  assert.deepEqual(parseOrigins(undefined), [], 'nothing configured')
+  assert.deepEqual(parseOrigins(''), [], 'empty is not a wildcard')
+  assert.equal(originAllowed('https://qalakaar.com', []), false, 'and allows nobody')
+  assert.equal(originAllowed(null, ['https://qalakaar.com']), false, 'no Origin header, no entry')
+})
+
 /* what Google says --------------------------------------------------------- */
 
 const { readStats, statsDay, SPAM_LIMIT, SPAM_WARN } = await import('./postmaster.ts')

@@ -161,6 +161,14 @@ export const campaigns = pgTable('campaigns', {
   audienceSegments: text('audience_segments').array().notNull().default(sql`'{}'::text[]`),
   audienceStages: text('audience_stages').array().notNull().default(sql`'{}'::text[]`),
   channel: channel('channel').notNull().default('email'),
+  /**
+   * Where a tracked link lands. Null means the built-in enquiry form.
+   *
+   * Resolved at redirect time rather than baked into the body, so changing it
+   * fixes letters already sitting in inboxes — which is the whole reason the
+   * body stores `/r/<token>` and never the destination.
+   */
+  destinationUrl: text('destination_url'),
   kind: campaignKind('kind').notNull().default('outbound'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 })
@@ -389,13 +397,41 @@ export const conversions = pgTable(
     campaignId: uuid('campaign_id').references(() => campaigns.id, { onDelete: 'set null' }),
     messageId: uuid('message_id').references(() => messages.id, { onDelete: 'set null' }),
     event: conversionEvent('event').notNull(),
+    /**
+     * The caller's own id for this transaction — an invoice number is the
+     * natural one. Empty string, never null, for callers that do not send one.
+     *
+     * Empty rather than null on purpose. It makes the unique key below work
+     * under ordinary SQL null semantics, which is what keeps two *different*
+     * anonymous visitors from colliding with each other.
+     */
+    eventId: text('event_id').notNull().default(''),
     /** Minor units — pence, paise, cents. Null when the step carries no money. */
     value: integer('value'),
     currency: text('currency'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex('conversions_contact_event_key').on(t.contactId, t.event),
+    /**
+     * A subscription is a transaction, not a funnel step: a renewal and an
+     * upgrade are both revenue, and counting only the first under-reports
+     * worst for exactly the best accounts. So the caller's id is part of the
+     * key.
+     *
+     * The null semantics here need care, and the first attempt got them
+     * wrong. A nullable `event_id` deduplicates nothing, because Postgres
+     * treats nulls as distinct — a retried webhook from a caller sending no id
+     * would double-count. But `NULLS NOT DISTINCT`, which fixes that, also
+     * makes `contact_id` nulls collide: two *different* anonymous visitors
+     * would silently become one, and erasing a contact could violate the
+     * constraint outright.
+     *
+     * Defaulting `event_id` to the empty string solves both at once. No id
+     * dedupes on (contact, event) as it always did; an id dedupes per
+     * transaction; and an unattributed conversion keeps a null contact, which
+     * stays distinct — so every stranger is counted.
+     */
+    uniqueIndex('conversions_contact_event_key').on(t.contactId, t.event, t.eventId),
     index('conversions_campaign_idx').on(t.campaignId),
   ],
 )

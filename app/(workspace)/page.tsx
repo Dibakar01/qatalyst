@@ -949,6 +949,33 @@ async function LetterSheet({
                 <Label>Subject</Label>
                 <input name="subject_template" defaultValue={campaign.subjectTemplate} className={ruled} />
               </label>
+
+              <label className="flex flex-col gap-2">
+                <Label>Where the link lands</Label>
+                <input
+                  name="destination_url"
+                  defaultValue={campaign.destinationUrl ?? ''}
+                  placeholder="https://qalakaar.com/start"
+                  className={ruled}
+                />
+                {/* Resolved when the link is clicked, never baked into the
+                    body — so changing this fixes letters already sitting in
+                    inboxes. Adding a destination does not put a link in the
+                    body, and without one the report reads as broken rather
+                    than empty, so say it here. */}
+                <span className="text-dim">
+                  {campaign.destinationUrl && !campaign.bodyTemplate.includes('{{link}}') ? (
+                    <span className="text-primary">
+                      Nothing links there yet — put <code>{'{{link}}'}</code> in the body.
+                    </span>
+                  ) : (
+                    <>
+                      Empty sends them to the enquiry form. Changing it also changes letters
+                      already sent.
+                    </>
+                  )}
+                </span>
+              </label>
             </div>
 
             <label className="flex min-h-0 flex-1 flex-col gap-2">

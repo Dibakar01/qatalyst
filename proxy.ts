@@ -9,11 +9,16 @@ import { COOKIE } from '@/lib/auth'
  * unsubscribe handler and nothing else, so the contact list never leaves the laptop.
  */
 /**
- * The three things that appear in an email and must work for a stranger with
- * no session: unsubscribing, the tracked link, and the form it lands on. These
- * are the whole of the public surface — everything else is the contact list.
+ * The five things that must work for a stranger with no session.
+ *
+ * Three appear in an email: unsubscribing, the tracked link, and the form it
+ * lands on. Two are the pixel: the script your site loads, and the endpoint it
+ * reports to. That endpoint is authenticated by Origin rather than by a
+ * secret, because a secret shipped to a browser is not a secret.
+ *
+ * Everything else is the contact list.
  */
-const PUBLIC = ['/u/', '/r/', '/enquire']
+const PUBLIC = ['/u/', '/r/', '/enquire', '/qt.js', '/api/collect']
 
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl

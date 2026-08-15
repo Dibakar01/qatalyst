@@ -153,9 +153,21 @@ nothing stored — carrying the contact and campaign, which resolve to exactly
 one message because `(campaign_id, contact_id)` is unique. An unsubscribe token
 cannot be replayed as a tracked link, and vice versa; both are tested.
 
-`/u/:token`, `/r/:token` and `/enquire` are the **entire** public surface. On
-the `PUBLIC_ONLY=1` deployment everything else — including the ingest door,
-which writes contacts — returns 404.
+`/u/:token`, `/r/:token`, `/enquire`, `/qt.js` and `/api/collect` are the
+**entire** public surface. On the `PUBLIC_ONLY=1` deployment everything else —
+including the ingest door, which writes contacts — returns 404.
+
+The last two are the pixel, and they change what the public deployment holds:
+it now records visitor events, not only unsubscribes and enquiries. `/api/collect`
+is authenticated by an `Origin` allowlist rather than a secret, because a secret
+shipped to a browser is not a secret — the browser sets that header and page
+script cannot forge it. An unset `SITE_ORIGINS` allows nobody, so a missed
+deployment step fails closed.
+
+A first-party identifier that names a specific person is ePrivacy territory for
+EU and UK visitors. "Only for people who clicked our own link" is a
+legitimate-interest argument, not an exemption — say so in the privacy notice
+before this ships.
 
 ## Writing a letter
 
@@ -337,7 +349,8 @@ deployment needs no token table and no session.
 | Erasure keeps the hash | `lib/contacts.ts` `eraseContact()` — suppresses before nulling |
 | Unknown verification results never become sendable | `lib/csv.ts` — any unrecognised status falls back to `unverified` |
 
-Deliberately absent: tracking pixels, link shorteners, open tracking, HTML
+Deliberately absent **inside the email**: open-tracking pixels, link
+shorteners, HTML
 email, `List-Unsubscribe` headers, lead scoring, scraping.
 
 ## Before this sends for real
