@@ -66,8 +66,13 @@ export function Fit({ children }: { children: React.ReactNode }) {
     return () => observer.disconnect()
   }, [router])
 
+  // A visible scrollbar, unlike everywhere else on this desk — and only ever
+  // when the fit is wrong. The whole point of the net is that a bad measurement
+  // costs a scrollbar instead of a row nobody knows is missing, and the hidden
+  // scrollbar the rest of the app uses would have left it missing and merely
+  // reachable. In normal working it never appears.
   return (
-    <div ref={box} className="quiet-scroll min-h-0 flex-1">
+    <div ref={box} className="min-h-0 flex-1 overflow-y-auto">
       {children}
     </div>
   )
