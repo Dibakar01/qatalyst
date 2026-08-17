@@ -146,10 +146,17 @@ if ! is_local_db "${DATABASE_URL:-}"; then
 fi
 
 # ── baseline regression: must not go red because of this build's own changes ──
+# Migrate FIRST. `npm test` now contains DB-touching checks (S1, S6), so a
+# suite run against an unmigrated database fails with `relation "contacts"
+# does not exist` and says nothing about the code. This ordering bug was
+# invisible while the DATABASE_URL defect above pointed every run at the
+# already-migrated production database; fixing that exposed this.
+# qa reached the same conclusion for CI — this is the same fix, here.
+run_step "db:migrate" "" npm run db:migrate
 run_step "lint, test, build" "" bash -c "npm run lint && npm test && npm run build"
 
 # ── migrate + phase 1-3 acceptance ──────────────────────────────────────────
-run_step "db:migrate, test:acceptance" "" bash -c "npm run db:migrate && npm run test:acceptance"
+run_step "test:acceptance" "" npm run test:acceptance
 
 # ── S2: db:seed must exit ───────────────────────────────────────────────────
 # GNU `timeout` is not on every machine this runs on (notably: not on macOS
