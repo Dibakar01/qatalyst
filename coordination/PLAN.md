@@ -232,9 +232,42 @@ manager reads this file and continues.
   **`docker build .` remains unverified everywhere.** A PR is the first thing that will ever
   exercise it — which is why the PR, not a direct merge, is the route.
 
-- **Phase 6 blocked externally.** GitHub's Issues/PR subsystem is returning 503 on both the
-  GraphQL and REST paths (partial outage); reads and `git push` are unaffected. The PR is
-  held and retrying.
+- **Phase 6 — CI GREEN. `11 passed, 0 failed, 0 unverifiable`** (run `32057108337`, commit
+  `ca57236`, PR #1). `docker build .` passes. Nothing is unverifiable any more.
+
+  **The PR route paid for itself three times over.** Every one of these was invisible to both
+  local machines and to the independent A4 review, and every one would have landed on `main`
+  under a direct merge:
+
+  1. **The window fixtures followed the server's clock.** `scripts/acceptance.ts` built its
+     timestamps with `new Date()` + `setHours()` — the exact assumption S4 removed from
+     `lib/`. Green on IST, red on a UTC runner where 07:00 UTC is 12:30 IST, inside the
+     window, so the sender correctly sent and the assertion correctly failed. **The product
+     was right and the test was wrong.** Three fixtures had it, not one: `noon` and `late`
+     were passing by luck, and `late` (16:30 local = 22:00 IST, outside the window) broke the
+     moment `early` was fixed. All three now use `atSendTime(hour, minute)`, which resolves
+     the wall time *and the weekday* in `SEND_TZ` — a Friday on the server can be a Saturday
+     for the operator. Verified across UTC, Asia/Kolkata, America/Los_Angeles, Pacific/Auckland.
+  2. **`pg_dump` 16 against a Postgres 17 server.** Fixed by matching the client to the
+     server, not by pinning the server down to the runner: production is 17, and a backup
+     tool that cannot read production is not a backup tool.
+  3. **Installing `postgresql-client-17` was not enough.** `/usr/bin/pg_dump` is `pg_wrapper`,
+     which resolves to the *default cluster's* version rather than the newest installed, so
+     the step went green while `pg_dump --version` still printed 16.14.
+
+  **The lesson that outranks all three: a step reporting success is not evidence the intended
+  effect occurred.** Defect 3's install genuinely succeeded — it just did not do the thing it
+  was for. That is the same shape as the S8 guard validating a `DATABASE_URL` the line above
+  had already replaced, and as `verify.sh` printing a phantom `FAIL` on a fully green run.
+  Three instances in one night is a habit, not a coincidence: **assert the effect, never the
+  exit code.** I wrote `pg_dump --version` into that step and then did not read its output,
+  which is the same failure as writing a guard and not running it.
+
+  **And the reason A4 was not enough on its own:** the independent reviewer's machine is also
+  IST, so server clock and `SEND_TZ` coincided there too. A4 bought an independent *grader*,
+  not an independent *environment*. CI on UTC was the first place the two differed — and that
+  is also the production shape: a UTC container with an IST operator, which is precisely the
+  case S4 exists for.
 
 - **Standing hazard, to disable before the PR exists:** an unattended process commits *and*
   pushes on a ~40-minute timer — `6d14785`, `bb4d329`, `5f10e78`, none carrying a Claude
