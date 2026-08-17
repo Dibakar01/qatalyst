@@ -307,7 +307,7 @@ so a backlog can never go out as a burst.
 
 | | |
 |---|---|
-| `npm test` | 46 pure-function checks — tokens, CSV mapping, templates, both validators, the sending rules, what the stamp asks for, the franking hash, and the letter's matrices. No database. |
+| `npm test` | 113 pure-function checks — tokens, CSV mapping, templates, both validators, the sending rules, what the stamp asks for, the franking hash, and the letter's matrices. No database. |
 | `npm run test:acceptance` | Phases 1–3 end to end. **Truncates tables**; refuses to run against anything but localhost. |
 | `npm run lint` / `npm run build` | |
 
