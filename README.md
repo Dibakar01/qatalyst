@@ -1,4 +1,19 @@
-# Qatalyst
+<h1 align="center">Qatalyst</h1>
+
+<p align="center">
+  <em>How we write to people one at a time —<br/>without ever writing to someone who asked us not to.</em>
+</p>
+
+<p align="center">
+  <a href="https://github.com/Dibakar01/qatalyst/actions/workflows/ci.yml">
+    <img alt="CI" src="https://github.com/Dibakar01/qatalyst/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="113 pure-function checks" src="https://img.shields.io/badge/checks-113_pure-d92819">
+  <img alt="Next.js" src="https://img.shields.io/badge/Next.js-App_Router-17110f">
+  <img alt="Postgres" src="https://img.shields.io/badge/Postgres-Drizzle-17110f">
+  <img alt="Internal" src="https://img.shields.io/badge/internal-not_a_CRM-8b807c">
+</p>
+
+---
 
 Internal outbound tool. Holds a bounded contact list, writes a personalised line
 per contact, enforces suppression before anything sends, and sends from our own
@@ -9,6 +24,11 @@ Not a CRM. No stages, no pipeline, no forecasting.
 **Phases 1–3 are built.** Phase 4 — reply and bounce ingestion, plus the
 Mailchimp handoff for opted-in contacts — is not; it needs real mail flowing
 first.
+
+> [!IMPORTANT]
+> **Two commands truncate tables**: `npm run test:acceptance` and `npm run verify`.
+> They refuse anything but a disposable database by name — but never point them at
+> `qatalyst`. Use `qatalyst_scratch`. See [Checks](#checks).
 
 ## The shape of the thing
 
@@ -97,12 +117,28 @@ Not a mailer. Contacts arrive from several sources, go out through a campaign,
 and the funnel closes when someone writes back through the website — attributed
 to the letter that caused it.
 
+```mermaid
+flowchart LR
+    A[Apollo]:::src --> IMP
+    L[LinkedIn]:::src --> IMP
+    C[CSV]:::src --> IMP
+
+    IMP[runImport - the only way in]:::gate
+    IMP --> K[contacts] --> M[campaign] --> R[review] --> S[sent]
+
+    S --> CK[click]:::hit
+    S --> RP[reply]:::hit
+    CK --> E[enquiry]:::hit
+    RP --> E
+
+    classDef src stroke:#8b807c,color:#8b807c
+    classDef gate stroke:#17110f,stroke-width:2px
+    classDef hit stroke:#d92819,color:#d92819
 ```
-  Apollo ─────┐
-  LinkedIn ───┤                                    ┌─▶ click  ─┐
-  CSV ────────┴──▶ contacts ──▶ campaign ──▶ sent ─┤           ├──▶ enquiry
-                                                    └─▶ reply ─┘
-```
+
+Three sources, **one** import path. There is deliberately no second route in,
+because a source that skipped `runImport()` would be a source that can mail
+someone who asked us to stop.
 
 ### Sources
 
@@ -188,7 +224,10 @@ The checks split into **stop** and **warn**, and the split is the point: a
 missing `{{personalised}}` is structural and blocks, tired phrasing is advice
 and never does. A checker that blocks on advice gets ignored.
 
-## Sending from several domains
+<details>
+<summary><b>Sending from several domains</b> — how volume splits, and why one burning does not stop the rest</summary>
+
+<br/>
 
 Cold outbound spreads across domains so the primary one survives: volume splits
 between them, each warms on its own clock, and one burning does not stop the
@@ -218,7 +257,32 @@ single-domain setup keeps working unchanged.
 Pausing a domain stops every mailbox on it at once, which is the point of
 grouping them.
 
+</details>
+
 ## Control and proof
+
+Every message is **claimed before the wire**, in one statement. That is the
+difference between a crash costing you a stuck row and a crash costing you a
+second copy in a prospect's inbox.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    approved --> sending: claimed in one UPDATE
+    sending --> sent: Gmail accepted
+    sending --> stuck: crash, never re-selected
+    sent --> tagged: Message-ID read back, after the write
+
+    note right of sending
+        A second process declines via
+        pg_try_advisory_lock rather
+        than competing.
+    end note
+```
+
+A failure *after* the wire counts as **sent**, not as a failure to retry: a
+missing Message-ID costs one unmatched reply, a duplicate costs the prospect and
+the domain.
 
 The sending rules are **settings, not constants** — the sending window, the
 bounce threshold and its sample minimum, the catch-all cap and the draft batch
@@ -305,13 +369,28 @@ so a backlog can never go out as a burst.
 
 ## Checks
 
-| | |
-|---|---|
-| `npm test` | 113 pure-function checks — tokens, CSV mapping, templates, both validators, the sending rules, what the stamp asks for, the franking hash, and the letter's matrices. No database. |
-| `npm run test:acceptance` | Phases 1–3 end to end. **Truncates tables**; refuses to run against anything but localhost. |
-| `npm run lint` / `npm run build` | |
+| Command | What it does | Touches the database |
+|---|---|---|
+| `npm test` | 113 pure-function checks — tokens, CSV mapping, templates, both validators, the sending rules, what the stamp asks for, the franking hash, and the letter's matrices | no |
+| `npm run lint` · `npm run build` | eslint, then a production build | no |
+| `npm run test:acceptance` | Phases 1–3 end to end | **truncates** |
+| `npm run verify` | **PROOF.** Everything above, plus `db:seed` termination, the S1/S4/S6/S9 regressions, `docker build`, and a backup + restore dry-run | **truncates** |
 
-CI runs all four against a Postgres 17 service container on every push and PR.
+> [!WARNING]
+> `test:acceptance` and `verify` **truncate tables** — including `contacts`,
+> `suppressions`, `mailboxes` and `campaigns`.
+>
+> They now refuse any database not named as disposable, because "is it local"
+> was never the right question: the real database is local too. This guard exists
+> because on 2026-08-17 its absence destroyed the live contact list.
+>
+> ```sh
+> DATABASE_URL="postgresql://$(whoami)@localhost:5432/qatalyst_scratch" npm run verify
+> ```
+
+CI runs all of these against a Postgres 17 service container on every push to
+`main` and every pull request. `docker build` is only ever exercised there — it
+is reported as *unverifiable*, never as a pass, on a machine without Docker.
 
 Handy while testing: `npm run db:reset` clears everything, `npm run db:demo`
 refills it, and `npm run token -- someone@example.com` prints a working
