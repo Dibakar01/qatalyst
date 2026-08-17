@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNotNull, isNull, lte, or, sql as raw } from 'drizzle-orm'
-import { db } from '../db/index.ts'
+import { db, sql } from '../db/index.ts'
 import {
   campaigns,
   contacts,
@@ -11,7 +11,7 @@ import {
   type Domain,
   type Mailbox,
 } from '../db/schema.ts'
-import { deliver, isConfigured } from './gmail.ts'
+import { deliver, isConfigured, messageIdFor, Refused } from './gmail.ts'
 import {
   afterFailure,
   allowanceNow,
@@ -205,11 +205,78 @@ export async function mailboxStats(mailboxId: string, now = new Date()): Promise
 }
 
 /**
+ * Take a message out of the queue *before* anything touches the wire.
+ *
+ * One statement, and the `status = 'approved'` predicate is the entire mechanism:
+ * Postgres serialises the two updates, so when two ticks — or two processes —
+ * reach for the same row, exactly one gets a row back and the other gets nothing.
+ * Nothing claimed a row before this existed, so a crash between the Gmail call
+ * and the write left the row `approved` and the next tick delivered the same cold
+ * email again, unbounded across restarts.
+ *
+ * `mailboxId` is optional and stamped here rather than only after delivery, so a
+ * row stranded in `sending` still says which mailbox was holding it when the
+ * process died — which is the first question anyone asks about a stranded row.
+ */
+export async function claimForSend(
+  messageId: string,
+  mailboxId?: string,
+): Promise<{ claimed: boolean }> {
+  const rows = await db
+    .update(messages)
+    .set({
+      status: 'sending',
+      // Counted at the claim rather than after a failure. A crash has no catch
+      // block left to run, and an attempt that vanished is an attempt not
+      // counted towards giving up.
+      attempts: raw`${messages.attempts} + 1`,
+      ...(mailboxId ? { mailboxId } : {}),
+    })
+    .where(and(eq(messages.id, messageId), eq(messages.status, 'approved')))
+    .returning({ id: messages.id })
+  return { claimed: rows.length === 1 }
+}
+
+/**
+ * The key for the sender's advisory lock. Arbitrary but fixed; any other
+ * advisory lock this codebase takes must use a different number.
+ */
+const SENDER_LOCK = 8726411
+
+/**
  * One pass of the sender. Call it on a timer; it decides what is allowed to go
  * out right now and sends at most that. Every path through here checks
  * suppression before delivery, and lib/gmail.ts checks again at the wire.
+ *
+ * Only one sender may work the queue at a time. `pg_try_advisory_lock` returns
+ * false rather than waiting, so a second process declines the tick instead of
+ * queueing up behind the first and then acting on a queue the first has already
+ * changed. `claimForSend` alone would make that safe, but two senders competing
+ * for every row is a race won by luck; this makes the second one leave. The lock
+ * lives on the connection, so it is released even when the process is killed —
+ * which is why it is taken on a reserved connection rather than a pooled one.
  */
 export async function sendTick(now = new Date()): Promise<TickResult> {
+  const held = await sql.reserve()
+  const [lock] = await held<{ locked: boolean }[]>`select pg_try_advisory_lock(${SENDER_LOCK}) as locked`
+  if (!lock.locked) {
+    held.release()
+    return {
+      sent: 0,
+      halted: [],
+      dryRun: !isConfigured(),
+      detail: ['another sender holds the queue; skipping this tick'],
+    }
+  }
+  try {
+    return await runTick(now)
+  } finally {
+    await held`select pg_advisory_unlock(${SENDER_LOCK})`
+    held.release()
+  }
+}
+
+async function runTick(now: Date): Promise<TickResult> {
   const result: TickResult = { sent: 0, halted: [], dryRun: !isConfigured(), detail: [] }
 
   // Nothing goes out at the weekend, warm-up included. A mailbox sending cold
@@ -336,6 +403,15 @@ export async function sendTick(now = new Date()): Promise<TickResult> {
         continue
       }
 
+      // Claim it before the wire. If this returns false another tick or another
+      // process already has the row, and the only safe thing to do is leave it
+      // alone — the alternative is two copies of the same cold email.
+      const { claimed } = await claimForSend(message.id, mailbox.id)
+      if (!claimed) {
+        taken.add(message.id)
+        continue
+      }
+
       try {
         const delivery = await deliver(
           mailbox.email,
@@ -345,6 +421,10 @@ export async function sendTick(now = new Date()): Promise<TickResult> {
           domain?.credentialKey,
           rules.practice,
         )
+        // Recorded before the Message-ID is read back, not after. Gmail has
+        // accepted the message by this point, so anything that goes wrong from
+        // here on is a bookkeeping problem and must never look like a failed
+        // send — that is what sent this mail up to three times.
         await db
           .update(messages)
           .set({
@@ -355,6 +435,15 @@ export async function sendTick(now = new Date()): Promise<TickResult> {
             error: null,
           })
           .where(eq(messages.id, message.id))
+        // Rule 6, best effort. A missing Message-ID costs one unmatched reply;
+        // treating its absence as a failure cost the prospect a second email.
+        if (delivery.gmailId) {
+          const header = await messageIdFor(mailbox.email, delivery.gmailId, domain?.credentialKey)
+          await db
+            .update(messages)
+            .set({ messageIdHeader: header, error: header ? null : 'sent, Message-ID not read back' })
+            .where(eq(messages.id, message.id))
+        }
         await db.insert(events).values({
           contactId: contact.id,
           messageId: message.id,
@@ -372,6 +461,19 @@ export async function sendTick(now = new Date()): Promise<TickResult> {
         )
       } catch (cause) {
         const error = cause instanceof Error ? cause.message : String(cause)
+        // `Refused` means Gmail is known not to have taken it, so the claim can
+        // be handed back and the message tried again. Anything else leaves the
+        // outcome unknown — a socket that died mid-request may still have been
+        // accepted — and the row stays in `sending`: never re-selected, visible
+        // to an operator, and never delivered twice.
+        if (!(cause instanceof Refused)) {
+          await db.update(messages).set({ error }).where(eq(messages.id, message.id))
+          result.detail.push(`${contact.email}: ${error} — outcome unknown, left for review`)
+          break
+        }
+        // `attempts` was already incremented by the claim, and afterFailure
+        // computes the same number from the row this tick read, so this writes
+        // the count it already holds rather than counting the try twice.
         const next = afterFailure(message.attempts ?? 0, now)
         await db
           .update(messages)
@@ -380,7 +482,7 @@ export async function sendTick(now = new Date()): Promise<TickResult> {
             attempts: next.attempts,
             nextAttemptAt: next.nextAttemptAt,
             // Out of tries: hand it to a person rather than retry forever.
-            ...(next.giveUp ? { status: 'flagged' as const } : {}),
+            status: next.giveUp ? 'flagged' : 'approved',
           })
           .where(eq(messages.id, message.id))
         result.detail.push(
@@ -462,7 +564,11 @@ async function warmTick(
       await db.insert(warmups).values({
         fromMailbox: mailbox.email,
         toMailbox: to,
-        messageIdHeader: delivery.messageIdHeader,
+        // Read back after the wire like the real post, and best effort for the
+        // same reason: a warm-up that landed must never be recorded as failed.
+        messageIdHeader: delivery.gmailId
+          ? await messageIdFor(mailbox.email, delivery.gmailId, domain?.credentialKey)
+          : delivery.messageIdHeader,
         // Stamped with the tick's clock, not the database's. The counters
         // filter on this date against the same `now`, so letting the column
         // default would let writer and reader disagree about which day a send
