@@ -1484,6 +1484,18 @@ const dbIndex = hasDb ? await import('../db/index.ts') : null
 const dbSchema = await import('../db/schema.ts')
 const { PRESETS: presets } = await import('./connectors.ts')
 
+// db/index.ts caches its postgres pool on globalThis and never closes it —
+// the same shape as S2's db:seed bug. Every other script that imports it
+// closes `sql` itself at the end (scripts/acceptance.ts's `await sql.end()`,
+// mirrored here) or is a long-running server where that is correct. A test
+// run is neither: without this, `node --test` never drains and hangs forever
+// after the last test finishes, however it was invoked.
+if (hasDb) {
+  test.after(async () => {
+    await dbIndex!.sql.end()
+  })
+}
+
 /** Every test below starts here — one line instead of repeating the check. */
 function skipWithoutDb(t: import('node:test').TestContext): boolean {
   if (hasDb) return false
