@@ -33,3 +33,27 @@ services:
       # Bound to localhost above, so this is defence in depth rather than the
       # only lock.
       RCH_HEADER_SECRET: ${REACHER_SECRET:-}
+
+  # The sender (S3). One process, working the queue a tick a minute — not a
+  # scheduler, not a broker. `restart: always` is the whole supervision story:
+  # if `npm run send` exits for any reason (crash, an uncaught error, `kill`),
+  # Docker starts it again. Two of these can never race the same rows —
+  # `sendTick()` takes a `pg_try_advisory_lock` at the top of every tick, so a
+  # second instance (a manual `docker compose up` while this one is already
+  # running, a slow restart overlapping a fresh start) declines the tick
+  # instead of competing for the same messages.
+  #
+  # Belongs on the same box as `reacher` and the database: it is the private,
+  # sending side of the deployment. The public unsubscribe-only deployment
+  # (`PUBLIC_ONLY=1`) runs on a different box and has no worker.
+  #
+  # No `depends_on: reacher` — the worker's send/pull loop does not call it.
+  # Reacher is wired to `verifyUnverified()` in lib/sources.ts, which has no
+  # caller yet (out of scope for this build; see PLAN.md). The two services
+  # share a box for convenience, not because one needs the other running.
+  worker:
+    build: .
+    restart: always
+    command: ['npm', 'run', 'send']
+    env_file:
+      - .env
