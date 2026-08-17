@@ -26,6 +26,10 @@ jobs:
       UNSUBSCRIBE_SECRET: ci-only-secret
       APP_PASSWORD: ci-only-password
       UNSUBSCRIBE_BASE_URL: http://localhost:3000
+      # S4: required, no default — assertDbTimezone() refuses to start
+      # without it once core lands. Also read directly by the tz-aware
+      # regression checks in lib/lib.test.ts.
+      SEND_TZ: Asia/Kolkata
 
     steps:
       - uses: actions/checkout@v7
@@ -36,9 +40,15 @@ jobs:
 
       - run: npm ci
       - run: npm run lint
-      - run: npm test
+      # Migrate before test: lib/lib.test.ts now has a section (S1/S4/S6)
+      # that opens a real database connection, so the schema has to exist
+      # before `npm test` runs, not after.
       - run: npm run db:migrate
+      - run: npm test
       # The phase 1 acceptance criteria: idempotent import, erasure that keeps
       # the suppression, tokens that only verify under our own secret.
       - run: npm run test:acceptance
+      # See coordination/CONTRACTS.md §4. Red on this branch until core and
+      # ops land their pieces — that is the point (PLAN.md D5).
+      - run: npm run verify
       - run: npm run build
