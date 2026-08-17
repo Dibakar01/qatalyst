@@ -97,7 +97,27 @@ run_step "lint, test, build" "" bash -c "npm run lint && npm test && npm run bui
 run_step "db:migrate, test:acceptance" "" bash -c "npm run db:migrate && npm run test:acceptance"
 
 # ── S2: db:seed must exit ───────────────────────────────────────────────────
-run_step "S2: db:seed exits within 30s" "core" timeout 30 npm run db:seed
+# GNU `timeout` is not on every machine this runs on (notably: not on macOS
+# without coreutils, which is where this was developed) — a portable
+# background-and-kill instead of depending on a binary that may not exist.
+run_with_timeout() {
+  local secs="$1"
+  shift
+  "$@" &
+  local pid=$!
+  local waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 1
+    waited=$((waited + 1))
+    if [ "$waited" -ge "$secs" ]; then
+      kill -9 "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      return 124
+    fi
+  done
+  wait "$pid"
+}
+run_step "S2: db:seed exits within 30s" "core" run_with_timeout 30 npm run db:seed
 
 # ── S1 / S4 / S6 / S9 regression checks ─────────────────────────────────────
 # Filtered to just the tests tagged S<n>: in lib/lib.test.ts, so a red run
