@@ -65,6 +65,29 @@ assigns the finding to. If that is ambiguous, it is a blocker, not a guess.
 `qa` writes tests against these **before `core` implements them**. The names, argument order,
 and return shapes do not move.
 
+> ### What "frozen" has to cover — learned the hard way, 2026-08-17
+>
+> §3.2 below froze a **behaviour**: *core adds the `List-Unsubscribe` headers, qa inverts the
+> test.* It never froze the **return shape**. So `core` landed
+> `assembleBody() → { body, headers }` and `qa`'s test destructured `{ text, headers }`.
+> Both lanes were individually correct. The build went red at integration, and the failure
+> surfaced as a *type* error inside a test file, which `next build` type-checks — so it broke
+> the build, not just the suite.
+>
+> **A contract that names an effect but not a type is only half frozen.** Freeze, for every
+> function two lanes touch:
+>
+> 1. the **name**,
+> 2. the **argument order and types**,
+> 3. the **return shape** — field names included, not just "returns the body and the headers",
+> 4. for server actions, the **`FormData` field names**, since `field(formData,'id')` is how
+>    every action reads its input and a mismatched `<input name>` silently no-ops.
+>
+> When a lane has to guess at something this file does not cover, the correct move is what
+> `qa` actually did: implement the guess, **name it as a guess in a comment at the site**, and
+> record it in the status file. That is why reconciling it took one word instead of an
+> afternoon of archaeology.
+
 ```ts
 // lib/send.ts — S1. The single-statement claim. Returns false if the row was not
 // in 'approved', which is what makes a second process (or a second tick) a no-op.

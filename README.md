@@ -26,6 +26,10 @@ Mailchimp handoff for opted-in contacts — is not; it needs real mail flowing
 first.
 
 > [!IMPORTANT]
+> **Sending is a dry run** until `GOOGLE_SERVICE_ACCOUNT_JSON` is set — the app records
+> exactly what it would have sent and never contacts Google. That is a safety property,
+> not an unfinished feature.
+>
 > **Two commands truncate tables**: `npm run test:acceptance` and `npm run verify`.
 > They refuse anything but a disposable database by name — but never point them at
 > `qatalyst`. Use `qatalyst_scratch`. See [Checks](#checks).

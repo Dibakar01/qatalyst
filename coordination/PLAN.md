@@ -203,8 +203,44 @@ manager reads this file and continues.
   the kill-switch walkthrough are human calendar items, tracked but out of this team's
   scope. Remaining path: independent PROOF on `integration`, then merge to `main`.
 
-- **Phase 5 in progress** — A4 says an author cannot grade their own work, and PROOF is
-  currently green as run by the session that wrote the fixes. A peer session that wrote
-  none of this code is running `verify.sh` independently against a fresh empty
-  `qatalyst_verify`, and adversarially testing the allowlist by pointing it at the
-  production name to confirm it refuses.
+- **Phase 5 COMPLETE — A4 satisfied.** A peer session that wrote none of this code ran
+  `bash scripts/verify.sh` against a brand-new, never-migrated `qatalyst_ci`:
+  **10 passed, 0 failed, 1 unverifiable, exit 0.** It confirmed both things I asked it to
+  check adversarially: that `db:migrate` genuinely runs before `lint/test/build` from a
+  database with no schema (so the ordering fix holds from zero rather than passing on
+  leftovers), and that the allowlist refuses the production name under evasion attempts —
+  query strings, case changes, trailing slashes.
+
+  **It found two real holes in the allowlist, both mine, both now closed (`1262543`):**
+  1. `postgres` was allowlisted. It is the maintenance database, exists on every machine,
+     and is what a bare connection string defaults to — the opposite of
+     throwaway-by-construction. It was there for one reason: CI ran against it. So CI now
+     creates its own `qatalyst_ci` via `POSTGRES_DB`, and the exception is gone.
+  2. `qatalyst_verify` was **not** allowlisted, and I had handed the reviewer a verification
+     command pointed at it. That command would have aborted at exit 2. Harmless in effect,
+     but it is this morning's incident in miniature — a safety-relevant path asserted rather
+     than executed. The re-run was executed before handing anything over.
+
+  This is the case for A4 in one paragraph: the author ran PROOF green twice and still
+  shipped two defects in the guard he had just written to prevent a data-loss incident.
+
+- **Correction to the record:** at one point both the peer and I believed nothing had been
+  pushed, reading "16 commits ahead of `main`" as "unpushed". Wrong. `git ls-remote` shows
+  every branch on origin, `integration` included. The work was never at risk on one machine.
+  What survives that correction is the part that mattered: CI triggers only on
+  `push: [main]` and `pull_request`, so pushing `integration` runs nothing, and
+  **`docker build .` remains unverified everywhere.** A PR is the first thing that will ever
+  exercise it — which is why the PR, not a direct merge, is the route.
+
+- **Phase 6 blocked externally.** GitHub's Issues/PR subsystem is returning 503 on both the
+  GraphQL and REST paths (partial outage); reads and `git push` are unaffected. The PR is
+  held and retrying.
+
+- **Standing hazard, to disable before the PR exists:** an unattended process commits *and*
+  pushes on a ~40-minute timer — `6d14785`, `bb4d329`, `5f10e78`, none carrying a Claude
+  trailer. Evidence points at Antigravity IDE: no git hooks are installed
+  (`.git/hooks` is samples only, `core.hooksPath` unset), and the remote reflog shows pushes
+  neither this session nor the peer performed. It once captured `scripts/verify.sh` mid-edit
+  and then committed a "fix syntax error" on top of its own bad snapshot. Once a PR exists it
+  can push onto the branch *after* review, so the reviewed diff and the merged diff stop
+  being the same artifact.
