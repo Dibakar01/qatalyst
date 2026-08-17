@@ -259,9 +259,17 @@ manager reads this file and continues.
   effect occurred.** Defect 3's install genuinely succeeded — it just did not do the thing it
   was for. That is the same shape as the S8 guard validating a `DATABASE_URL` the line above
   had already replaced, and as `verify.sh` printing a phantom `FAIL` on a fully green run.
-  Three instances in one night is a habit, not a coincidence: **assert the effect, never the
-  exit code.** I wrote `pg_dump --version` into that step and then did not read its output,
-  which is the same failure as writing a guard and not running it.
+  Three instances in one night is a habit, not a coincidence. The rule, in the sharper form
+  the independent reviewer put it: **assert the effect, not the exit code — and read the
+  output of the check you just wrote.**
+
+  That second clause is the one that would have caught all of them. **Every single instance
+  had a verification step already present and simply unexamined.** `pg_dump --version` sat in
+  that workflow printing `16.14` for an entire CI run before either of us looked at it. The
+  S8 guard ran and passed on a value the line above had replaced. `verify.sh` printed its
+  phantom `FAIL` in a summary we both read past. The checks were not missing; nobody read
+  them. Writing a check and not reading it is the same failure as writing a guard and not
+  running it, and it is cheaper to fix — it costs one glance.
 
   **And the reason A4 was not enough on its own:** the independent reviewer's machine is also
   IST, so server clock and `SEND_TZ` coincided there too. A4 bought an independent *grader*,

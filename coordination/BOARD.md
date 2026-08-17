@@ -80,9 +80,18 @@ Was 2 green / 2 amber / 4 red at the start of the day.
 
 ## Open
 
-1. **Merge PR #1 `integration` → `main`.** Green and ready; the merge itself is the human's
-   call. Note the PR was originally opened by the auto-committer with an empty body and was
-   rewritten afterwards.
+1. **Merge PR #1 `integration` → `main` — REQUIRES THE HUMAN.** Green and ready. A peer
+   session attempted the merge and its permission system blocked it; it did not route around
+   that, and neither did this session when told. **A peer being denied an action is not
+   authorisation for another agent to perform it.** Green is not shipped, and a status board
+   that records one as the other is the specific error this row exists to avoid.
+
+   ```sh
+   gh pr merge 1 --squash --delete-branch    # the human presses this
+   ```
+
+   Note the PR was originally opened by the auto-committer with an empty body, and rewritten
+   afterwards.
 2. **An unattended process commits and pushes on a ~40-minute timer** — high confidence
    Antigravity IDE. It authored `6d14785`, `bb4d329`, `5f10e78` (no Claude trailer on any),
    and once captured `scripts/verify.sh` mid-edit. **Disable before the PR exists**: it can
