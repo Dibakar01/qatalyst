@@ -14,14 +14,32 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-# Load .env the same way every "node --env-file-if-exists=.env ..." script in
-# package.json does, so a bare `bash scripts/verify.sh` behaves like the npm
-# scripts it drives rather than needing its own separately-remembered setup.
-if [ -f .env ]; then
+# Load .env so a bare `bash scripts/verify.sh` behaves like the npm scripts it
+# drives — but NEVER over a DATABASE_URL the caller set deliberately.
+#
+# This exact line destroyed the real database on 2026-08-17. It was an
+# unconditional `set -a; source .env`, so
+#   DATABASE_URL=…/qatalyst_scratch bash scripts/verify.sh
+# was silently rewritten to point at .env's database, and the S8 guard below
+# then validated the value this line had just replaced — a rail checking the
+# thing it was supposed to be protecting you from. test:acceptance truncates,
+# and it truncated production.
+#
+# `restore.sh` already had this right. Same rule here: an explicit value wins.
+if [ -f .env ] && [ -z "${DATABASE_URL:-}" ]; then
   set -a
   # shellcheck disable=SC1091
   source .env
   set +a
+elif [ -f .env ]; then
+  # Everything else in .env is still wanted; DATABASE_URL specifically is not.
+  _keep_db="${DATABASE_URL}"
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+  DATABASE_URL="${_keep_db}"
+  unset _keep_db
 fi
 
 PASS=()
@@ -83,8 +101,41 @@ else
   PASS+=("S8: guard still refuses a host that is not actually local")
 fi
 
-# The real gate: this process's own DATABASE_URL, checked before anything
-# below is allowed to touch a database at all.
+# ── The database must be DISPOSABLE, not merely local ───────────────────────
+# Local was never the property that mattered. The real qatalyst database is
+# local too, and on 2026-08-17 this guard waved it through and test:acceptance
+# truncated it. "Is it reachable from outside?" is a different question from
+# "may I destroy it?", and only the second one is being asked here.
+#
+# So: an explicit allowlist of names that are, by construction, throwaway.
+# Anything else — above all the bare production name — is refused, and adding
+# to this list is a deliberate act rather than a default.
+is_disposable_db() {
+  node -e '
+    const DISPOSABLE = /^(qatalyst_(scratch|integration|core|qa|ops|test|ci)|postgres)$/
+    try {
+      const name = new URL(process.argv[1] ?? "").pathname.replace(/^\//, "")
+      process.exit(DISPOSABLE.test(name) ? 0 : 1)
+    } catch { process.exit(1) }
+  ' "$1"
+}
+
+if is_disposable_db "postgresql://localhost:5432/qatalyst"; then
+  FAIL+=("S8: guard refuses the production database name")
+else
+  PASS+=("S8: guard refuses the production database name")
+fi
+
+if ! is_disposable_db "${DATABASE_URL:-}"; then
+  echo
+  echo "refusing to continue: DATABASE_URL is not a disposable database." >&2
+  echo "  this script runs test:acceptance, which TRUNCATES TABLES." >&2
+  echo "  current value: ${DATABASE_URL:-<unset>}" >&2
+  echo "  use one of: qatalyst_scratch, qatalyst_integration, qatalyst_ci" >&2
+  exit 2
+fi
+
+# The original gate too: still refuse anything non-local, belt and braces.
 if ! is_local_db "${DATABASE_URL:-}"; then
   echo
   echo "refusing to continue: DATABASE_URL does not parse to a local host." >&2
@@ -160,7 +211,9 @@ for p in "${PASS[@]:-}"; do
   [ -n "${p}" ] && echo "  PASS  ${p}"
 done
 for f in "${FAIL[@]:-}"; do
-  echo "  FAIL  ${f}"
+  # Same guard as PASS: "${arr[@]:-}" on an empty array expands to one empty
+  # string, which printed a phantom FAIL line on the first fully green run.
+  [ -n "${f}" ] && echo "  FAIL  ${f}"
 done
 for s in "${SKIP[@]:-}"; do
   [ -n "${s}" ] && echo "  ????  ${s}"
