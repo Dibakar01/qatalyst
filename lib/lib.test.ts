@@ -170,14 +170,15 @@ test('S9: every assembled body carries an opt-out sentence, the link, and a work
   // HTTPS link, and the one-click POST form, so a mail client's own
   // "Unsubscribe" button works without a human choosing to click through.
   //
-  // Assumption, not a frozen signature (CONTRACTS.md §2 does not cover this):
-  // assembleBody() now returns { text, headers } instead of a plain string,
-  // since RFC 8058 headers cannot live inside a plain-text body a person
-  // reads. If core lands a different shape, this test needs reconciling —
-  // see coordination/status/qa.md.
-  const { text, headers } = assembleBody('Hi Ada,\n\nSomething specific.', 'https://u.example/abc')
-  assert.match(text, /would rather I did not write again/)
-  assert.ok(text.includes('https://u.example/abc'))
+  // assembleBody() returns { body, headers } rather than a plain string, since
+  // RFC 8058 headers cannot live inside a plain-text body a person reads.
+  // Reconciled at integration: this lane had assumed `text` and core landed
+  // `body`, because CONTRACTS.md §3.2 froze the behaviour and not the return
+  // shape. `body` wins — the function is assembleBody and the rest of the
+  // codebase calls it a body.
+  const { body, headers } = assembleBody('Hi Ada,\n\nSomething specific.', 'https://u.example/abc')
+  assert.match(body, /would rather I did not write again/)
+  assert.ok(body.includes('https://u.example/abc'))
   assert.equal(headers['List-Unsubscribe'], '<https://u.example/abc>', 'exactly one HTTPS link, angle-bracketed per RFC 2369')
   assert.equal(headers['List-Unsubscribe-Post'], 'List-Unsubscribe=One-Click', 'RFC 8058 one-click form')
 })

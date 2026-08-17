@@ -2,13 +2,19 @@
 
 Written by the manager, from the lanes' status files. Nobody else edits this.
 
-**Phase 2 — launching.** Approved 2026-08-17.
+**Phase 3 — supervising.** All three lanes launched 2026-08-17, from `2208f3f`.
 
 | lane | agent | worktree | branch | status | last update |
 | --- | --- | --- | --- | --- | --- |
-| core | — | `../qatalyst-core` | `core` | not started | — |
-| qa | — | `../qatalyst-qa` | `qa` | not started | — |
-| ops | — | `../qatalyst-ops` | `ops` | not started | — |
+| core | `core` (Opus) | `../qatalyst-core` | `core` | running | launched |
+| qa | `qa` (Sonnet) | `../qatalyst-qa` | `qa` | running | launched |
+| ops | `ops` (Sonnet) | `../qatalyst-ops` | `ops` | running | launched |
+
+Each worktree has its own scratch database — `qatalyst_core` / `qatalyst_qa` /
+`qatalyst_ops`, all migrated, all green at 113 tests — and `node_modules` symlinked from the
+main checkout. **No worktree references the real `qatalyst` database**, which is the one
+holding the live contact list and which `test:acceptance` would truncate. No Google sending
+credential is configured anywhere, so all sending is a dry run.
 
 ## Findings
 

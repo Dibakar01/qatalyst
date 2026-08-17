@@ -26,6 +26,10 @@ fi
 
 PASS=()
 FAIL=()
+# A step this machine cannot run is not a step that failed. Collapsing the two
+# is how a harness starts lying: "docker: command not found" and "the image is
+# broken" are different facts, and only one of them is the code's problem.
+SKIP=()
 
 # Runs one criterion and records pass/fail without aborting the script.
 # $1 = human label, $2 = owning lane if the piece being checked does not
@@ -39,7 +43,7 @@ run_step() {
     PASS+=("${label}")
   else
     local suffix=""
-    [ -n "${owner}" ] && suffix="  [owned by ${owner} — not landed in this worktree yet]"
+    [ -n "${owner}" ] && suffix="  [${owner} lane]"
     FAIL+=("${label}${suffix}")
   fi
 }
@@ -129,21 +133,43 @@ run_step "S1/S4/S6/S9: regression checks (lib/lib.test.ts)" "core" \
   node --test --test-name-pattern '^S[0-9]+:' lib/lib.test.ts
 
 # ── S3: deployment artifact ──────────────────────────────────────────────────
-run_step "S3: docker build ." "ops" docker build .
+# The image must actually build; a Dockerfile nobody has built is a guess. But
+# a machine without docker cannot answer the question either way, so say that
+# rather than reporting a red the code did not earn. CI runs on ubuntu, which
+# has docker, and that is where this claim is actually settled.
+if command -v docker >/dev/null 2>&1; then
+  run_step "S3: docker build ." "ops" docker build .
+else
+  echo
+  echo "── S3: docker build . ──────────────────────────────────────────────"
+  echo "  docker is not installed on this machine — cannot verify here."
+  SKIP+=("S3: docker build .  [no docker on this machine; CI settles it]")
+fi
 
 # ── S7: restore drill ────────────────────────────────────────────────────────
+# Back up first, then dry-run against what that produced. A dry-run with no
+# backup on disk only proves the script can complain, which is not the claim.
+run_step "S7: scripts/backup.sh" "ops" bash scripts/backup.sh
 run_step "S7: scripts/restore.sh --dry-run" "ops" bash scripts/restore.sh --dry-run
 
 # ── summary ───────────────────────────────────────────────────────────────────
 echo
 echo "════════════════════════════════════════════════════════════════════════"
-echo "verify: ${#PASS[@]} passed, ${#FAIL[@]} failed"
+echo "verify: ${#PASS[@]} passed, ${#FAIL[@]} failed, ${#SKIP[@]} unverifiable here"
 for p in "${PASS[@]:-}"; do
   [ -n "${p}" ] && echo "  PASS  ${p}"
 done
 for f in "${FAIL[@]:-}"; do
   echo "  FAIL  ${f}"
 done
+for s in "${SKIP[@]:-}"; do
+  [ -n "${s}" ] && echo "  ????  ${s}"
+done
+if [ "${#SKIP[@]}" -gt 0 ]; then
+  echo
+  echo "  NOTE: ${#SKIP[@]} step(s) could not run here, so a green exit below does"
+  echo "        NOT cover them. They are settled in CI, not on this machine."
+fi
 echo "════════════════════════════════════════════════════════════════════════"
 
 [ "${#FAIL[@]}" -eq 0 ]
