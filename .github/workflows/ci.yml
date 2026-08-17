@@ -14,6 +14,10 @@ jobs:
         image: postgres:17
         env:
           POSTGRES_PASSWORD: postgres
+          # A purpose-made database rather than the `postgres` maintenance one,
+          # so verify.sh's disposable-database allowlist need not carry an
+          # exception for it. The image creates this on first start.
+          POSTGRES_DB: qatalyst_ci
         ports: ['5432:5432']
         options: >-
           --health-cmd pg_isready
@@ -22,7 +26,7 @@ jobs:
           --health-retries 10
 
     env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/qatalyst_ci
       UNSUBSCRIBE_SECRET: ci-only-secret
       APP_PASSWORD: ci-only-password
       UNSUBSCRIBE_BASE_URL: http://localhost:3000

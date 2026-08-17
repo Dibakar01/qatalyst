@@ -112,7 +112,15 @@ fi
 # to this list is a deliberate act rather than a default.
 is_disposable_db() {
   node -e '
-    const DISPOSABLE = /^(qatalyst_(scratch|integration|core|qa|ops|test|ci)|postgres)$/
+    // Explicit names only. `postgres` was here so CI would pass and was cut on
+    // review: it is the maintenance database, it exists on every machine, and
+    // it is what a bare connection string defaults to — the opposite of
+    // throwaway-by-construction. CI now makes its own qatalyst_ci instead.
+    //
+    // This check carries NO locality guarantee: `…/evil.example/qatalyst_ci`
+    // passes it and is stopped by the is_local_db block below. The order of
+    // the two blocks is load-bearing; do not reshuffle them.
+    const DISPOSABLE = /^qatalyst_(scratch|integration|verify|core|qa|ops|test|ci)$/
     try {
       const name = new URL(process.argv[1] ?? "").pathname.replace(/^\//, "")
       process.exit(DISPOSABLE.test(name) ? 0 : 1)
