@@ -1,12 +1,9 @@
 import { createHash } from 'node:crypto'
-import { drizzle } from 'drizzle-orm/postgres-js'
-import postgres from 'postgres'
+// The shared pool, not a private one: this script imports lib/domains.ts below, which
+// opens db/index.ts's pool anyway. Two pools meant only one ever got closed, so the
+// event loop never drained and the documented setup step hung forever.
+import { db, sql } from '../db/index.ts'
 import { mailboxes, suppressions } from '../db/schema.ts'
-
-if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is not set')
-
-const sql = postgres(process.env.DATABASE_URL, { max: 1 })
-const db = drizzle(sql)
 
 const domain = process.env.SEND_DOMAIN ?? 'example.com'
 
