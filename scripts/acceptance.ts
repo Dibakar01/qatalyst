@@ -14,7 +14,26 @@ import { emailHash, isSuppressed, suppress } from '../lib/suppression.ts'
 import { makeToken, readToken } from '../lib/token.ts'
 
 // This truncates tables. Never let it point at anything but a dev database.
-if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? '')) {
+//
+// S8: the old check was `/@(localhost|127\.0\.0\.1)[:/]/`, which requires an
+// `@` — so `postgresql://localhost:5432/db`, the Homebrew default with no
+// username, was refused even though it is local. It failed closed, which is
+// the right direction, but a safety rail that blocks legitimate use is one
+// somebody eventually edits, and this one guards a TRUNCATE. Parse the URL
+// properly instead; keep failing closed on anything that does not parse.
+//
+// scripts/verify.sh step 1 runs the same check, on purpose — kept in sync by
+// hand rather than shared through a module, since it is three lines.
+export function isLocalDatabaseUrl(url: string): boolean {
+  try {
+    const { hostname } = new URL(url)
+    return hostname === 'localhost' || hostname === '127.0.0.1'
+  } catch {
+    return false
+  }
+}
+
+if (!isLocalDatabaseUrl(process.env.DATABASE_URL ?? '')) {
   throw new Error('refusing to run: DATABASE_URL is not local')
 }
 
