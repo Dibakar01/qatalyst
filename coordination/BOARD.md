@@ -44,9 +44,24 @@ Run twice: once by the manager, then independently by a session that wrote none 
 against a brand-new never-migrated `qatalyst_ci`. **A4 satisfied.** That reviewer also found
 two real holes in the disposable-database allowlist, both since closed (`1262543`).
 
-The one unverifiable step is `docker build .` — there is no Docker binary on this machine, and
-the harness reports it as `????`, never as a pass. It is settled by CI on ubuntu, which has
-not yet run because CI triggers only on `push: [main]` and `pull_request`.
+**And green on CI — `11 passed, 0 failed, 0 unverifiable`** (run `32057108337`, commit
+`ca57236`, PR #1). `docker build .` finally has a real result: it **passes**. Nothing is
+"unverifiable" any more; every criterion has been executed somewhere.
+
+Getting there took three defects that **no local run could have found**, which is the whole
+argument for the PR route over a direct merge:
+
+| | Defect | Why it was invisible locally |
+|---|---|---|
+| 1 | The window fixtures built timestamps with `setHours()` — the **server's** clock, the exact assumption S4 removed | Both dev machines are IST, so server clock and `SEND_TZ` coincided. Three fixtures had it; `noon` and `late` were passing by luck, and `late` broke the moment `early` was fixed |
+| 2 | `pg_dump` 16 on the runner against a Postgres 17 container | Locally the client matches the server |
+| 3 | Installing `postgresql-client-17` left `pg_dump` 16 on PATH — `/usr/bin/pg_dump` is `pg_wrapper`, which picks the **default cluster's** version, not the newest | Only exists on Debian-packaged Postgres |
+
+Defect 3 is worth keeping for its shape rather than its content: **the install step reported
+`success`, and it had — the package installed. It just did not do the thing it was for.** Same
+family as the S8 guard validating a `DATABASE_URL` the line above had already replaced, and as
+`verify.sh` printing a phantom `FAIL` on a green run. Three in one night: assert the *effect*,
+never the exit code.
 
 ## Ship gate
 
@@ -65,9 +80,9 @@ Was 2 green / 2 amber / 4 red at the start of the day.
 
 ## Open
 
-1. **PR `integration` → `main`.** GitHub's Issues/PR subsystem is returning 503 (partial
-   outage); reads and `git push` are fine. Held, retrying. The PR is what finally exercises
-   `docker build` on ubuntu, before `main` carries the code.
+1. **Merge PR #1 `integration` → `main`.** Green and ready; the merge itself is the human's
+   call. Note the PR was originally opened by the auto-committer with an empty body and was
+   rewritten afterwards.
 2. **An unattended process commits and pushes on a ~40-minute timer** — high confidence
    Antigravity IDE. It authored `6d14785`, `bb4d329`, `5f10e78` (no Claude trailer on any),
    and once captured `scripts/verify.sh` mid-edit. **Disable before the PR exists**: it can
