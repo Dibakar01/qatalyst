@@ -4,6 +4,55 @@ Operations page for Qatalyst: how to deploy it, how to restart the worker, how
 to back up and restore, and the kill switch. Written for someone who did not
 build this, at whatever hour they're reading it.
 
+## Read this before you run anything
+
+**Two commands destroy data: `npm run test:acceptance` and `npm run verify`.**
+They `TRUNCATE` — `contacts`, `suppressions`, `messages`, `events`, and also
+`mailboxes` and `campaigns`. That is not a side effect; it is how they get a
+clean database to assert against.
+
+They now refuse to run unless `DATABASE_URL` names a database on an explicit
+**disposable list**:
+
+```
+qatalyst_scratch   qatalyst_integration   qatalyst_verify   qatalyst_ci
+qatalyst_core      qatalyst_qa            qatalyst_ops      qatalyst_test
+```
+
+Anything else — above all a bare `qatalyst` — aborts with exit 2 before touching
+the database.
+
+```sh
+# safe
+DATABASE_URL="postgresql://$(whoami)@localhost:5432/qatalyst_scratch" npm run verify
+
+# refused, by design
+DATABASE_URL="postgresql://$(whoami)@localhost:5432/qatalyst" npm run verify
+```
+
+**"Is it local?" is not the question, and asking it is what caused the
+incident.** On 2026-08-17 the guard checked only that the host was local. The
+production database is local. It passed, and `test:acceptance` truncated the
+live contact list — 4 contacts, 1 suppression, 4 messages, every mailbox and
+every campaign — with no backup or PITR predating it. The list was test data at
+the time, which is the only reason this is a paragraph in a runbook rather than
+a much worse day.
+
+Two things follow, and neither is optional once real leads are loaded:
+
+- **Never edit the allowlist to make a run succeed.** If a command refuses, the
+  database is the problem, not the guard. Create a scratch one:
+  `createdb qatalyst_scratch`.
+- **WAL archiving is on** (`archive_mode=on`, archiving to
+  `~/.qatalyst-backups/wal/`), so point-in-time recovery now exists. It did not
+  on the day it was needed. Take a base backup with `npm run backup` before any
+  bulk import, and see [Restore](#restore).
+
+> Sending is a **dry run** while `GOOGLE_SERVICE_ACCOUNT_JSON` is unset: the
+> app records exactly what it would have sent, including a placeholder
+> Message-ID, and never contacts Google. That is a safety property, not an
+> oversight. Do not set it to "see if it works".
+
 ## What actually runs
 
 One Docker image (`Dockerfile`), three ways:
