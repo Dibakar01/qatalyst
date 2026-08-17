@@ -151,3 +151,60 @@ manager reads this file and continues.
   signed Vivanta agreement template (two clauses both numbered 3.1.11 with contradictory
   restricted periods; 3.2.1 contradicting 5.2 on who provides the sound system; 1.3
   contradicting 7.1.1 on the term).
+
+- **2026-08-17, Phase 4** — All three lanes merged into `integration` with **zero
+  conflicts**. That is the return on Phase 1: 20+ files changed across three agents that
+  never spoke, and not one file had two owners.
+
+  One thing the contract did not freeze, and it cost a red build: `CONTRACTS.md` §3.2 said
+  *core adds the `List-Unsubscribe` headers, qa inverts the test* — the behaviour — but
+  never the **return shape**. Core landed `assembleBody → { body, headers }`; qa's test
+  destructured `{ text, headers }`. Both lanes were individually correct. Reconciled to
+  `body` at integration. **Next round: freeze return shapes, not just behaviour.** A
+  contract that names an effect but not a type is only half frozen.
+
+- **2026-08-17, 22:06 — INCIDENT: `verify.sh` truncated the production database.**
+
+  `scripts/verify.sh` opened with an unconditional `set -a; source .env`, which overwrote
+  any `DATABASE_URL` the caller passed. So `DATABASE_URL=…/qatalyst_scratch bash
+  scripts/verify.sh` silently ran against `.env`'s database — the real one. The S8 guard
+  then validated the value that line had just replaced: **a safety rail checking the thing
+  it was meant to protect you from.** `test:acceptance` truncates `contacts, suppressions,
+  messages, events` and, at `acceptance.ts:134`, also `mailboxes, campaigns`.
+
+  Lost: 4 contacts, 1 suppression, 4 messages, plus all mailboxes and campaigns. No backup
+  or PITR predated the loss — S7 landed forty minutes too late to protect the data it was
+  written for.
+
+  Two mistakes of mine worth naming, because both are patterns:
+  1. **I verified the wrong mechanism.** I empirically confirmed an env override beats
+     `--env-file-if-exists` — true, for `node`. `verify.sh` is bash and re-sources `.env`
+     itself. I tested the risk I expected instead of the path I was running.
+  2. **I reported a false positive as reassurance.** I claimed the suppression list
+     survived because its hashes matched `qatalyst_scratch`. They matched because both are
+     the *same fixtures from the same script*: `sha256("blocked@example.com")` and
+     `sha256("s@example.test")`, written by `acceptance.ts:48,160`. Comparing two outputs
+     of one generator is not corroboration. The real suppression is gone.
+
+  **The lesson, and it is the highest-value line in this file.** This defect surfaced in
+  the one window where the database held nothing but test rows — the real lead list is
+  still in Sales Navigator, Apollo and Notion, not yet imported. The same bug three weeks
+  from now, after those imports land, destroys the actual asset. The allowlist fix
+  (`433444d`) is what makes that safe, and it is the most valuable commit of the day.
+
+  Fixes, all in `433444d`: an explicit `DATABASE_URL` now wins over `.env`;
+  `is_disposable_db()` refuses anything not named as throwaway, so **"is it local" is no
+  longer the question** — the production database is local too; `db:migrate` moved before
+  `lint/test/build` (a second ordering bug the first was masking); the phantom `FAIL` line
+  on a green run. WAL archiving enabled and proven (forced a WAL switch, files land,
+  0 archiver failures).
+
+- **Definition of done, narrowed:** code green + merged. Warm-up, the privacy notice and
+  the kill-switch walkthrough are human calendar items, tracked but out of this team's
+  scope. Remaining path: independent PROOF on `integration`, then merge to `main`.
+
+- **Phase 5 in progress** — A4 says an author cannot grade their own work, and PROOF is
+  currently green as run by the session that wrote the fixes. A peer session that wrote
+  none of this code is running `verify.sh` independently against a fresh empty
+  `qatalyst_verify`, and adversarially testing the allowlist by pointing it at the
+  production name to confirm it refuses.
