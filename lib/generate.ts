@@ -140,7 +140,9 @@ export async function generateForCampaign(campaignId: string, limit = 100): Prom
             campaignId,
             contactId: contact.id,
             subject: fill(campaign.subjectTemplate, values),
-            body: assembleBody(rendered, unsubscribeUrl(contact.email!)),
+            // The headers are rebuilt at the wire from the same function, so only
+            // the text is stored — it is what a person approves on screen.
+            body: assembleBody(rendered, unsubscribeUrl(contact.email!)).body,
             status: (flags.length ? 'flagged' : 'draft') as 'flagged' | 'draft',
             validatorFlags: flags,
           }

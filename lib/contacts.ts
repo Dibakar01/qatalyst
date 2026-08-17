@@ -1,6 +1,7 @@
 import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/index.ts'
 import { consentStatus, contacts, emailStatus, type Contact, type NewContact } from '../db/schema.ts'
+import { PUSH_SOURCE_SUFFIX } from './connectors.ts'
 import { mapRow, type Mapping, type Row } from './csv.ts'
 import { suppress, suppressionIndex } from './suppression.ts'
 
@@ -37,6 +38,11 @@ export async function runImport(
   const counts: ImportCounts = { new: 0, duplicate: 0, suppressed: 0, malformed: 0, errors: [] }
   const pending: NewContact[] = []
   const seen = new Set<string>()
+  // Rows that arrived through the push door do not get to say an address is
+  // sendable. Every other caller here is a signed-in operator or a source we
+  // called ourselves; that one holds a bearer token pasted into a third party's
+  // settings screen, and its `Email Status` column is whatever the poster typed.
+  const mayAssertVerification = !source.endsWith(PUSH_SOURCE_SUFFIX)
 
   for (const row of rows) {
     const result = mapRow(row, mapping)
@@ -46,6 +52,12 @@ export async function runImport(
       continue
     }
     const contact = result.contact
+    // Only the two sendable statuses are downgraded. A caller marking an address
+    // `invalid` can only ever remove sendability, so there is nothing to gain by
+    // lying in that direction and no reason to overrule it.
+    if (!mayAssertVerification && SENDABLE.includes(contact.emailStatus as EmailStatus)) {
+      contact.emailStatus = 'unverified'
+    }
     if (contact.email && suppressed(contact.email)) {
       counts.suppressed++
       continue

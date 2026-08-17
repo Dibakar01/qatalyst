@@ -71,7 +71,7 @@ const drafts = people
       body: assembleBody(
         fill(campaign.bodyTemplate, { ...values, [SLOT]: line }),
         unsubscribeUrl(person.email!),
-      ),
+      ).body,
       status: (flags.length ? 'flagged' : 'draft') as 'flagged' | 'draft',
       validatorFlags: flags,
     }

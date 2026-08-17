@@ -24,6 +24,25 @@ export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl
 
   if (PUBLIC.some((path) => pathname.startsWith(path))) return NextResponse.next()
+
+  // Build output. `_next/static` used to be excluded from the matcher below, so
+  // this decision could not be made at all: both deployments run the same build,
+  // and the public one therefore served the workspace's client chunks — which
+  // carry its server-action ids — to anyone who asked. Not exploitable, since
+  // requireAuth() holds on every action but signOut, but it is a free map of the
+  // thing being guarded.
+  //
+  // The public deployment still needs these: /u/ and /enquire are Next pages and
+  // load their own chunks from here. Turbopack emits them flat, with opaque
+  // hashed names and no route grouping, so there is no prefix that separates the
+  // workspace's chunks from the public pages'.
+  //
+  // ponytail: the public deployment is still served the four chunks its own
+  // pages never reference. Closing that needs two builds rather than one shared
+  // one — a deployment change, not a proxy change. Until then this is where it
+  // would go, and this branch is the one line that has to change.
+  if (pathname.startsWith('/_next/static')) return NextResponse.next()
+
   if (process.env.PUBLIC_ONLY === '1') return new NextResponse('Not found', { status: 404 })
 
   // Webhooks cannot carry a session cookie, so the route checks a bearer secret
@@ -42,6 +61,11 @@ export function proxy(req: NextRequest) {
 // favicon — the browser asks for it before anyone has logged in, and a redirect
 // to /login is not an image. `apple-icon` is unanchored because Next serves it
 // from a generated route with a hash in the path.
+//
+// `_next/static` is deliberately *not* excluded here any more. A matcher is
+// evaluated at build time and both deployments share one build, so an exclusion
+// here cannot tell them apart — the decision has to be made in `proxy()`, at
+// request time, where `PUBLIC_ONLY` is actually readable.
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|icon\\.svg|apple-icon).*)'],
+  matcher: ['/((?!_next/image|icon\\.svg|apple-icon).*)'],
 }

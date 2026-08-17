@@ -1,6 +1,8 @@
 import { createSign } from 'node:crypto'
 import { credentialFor } from './domains.ts'
 import { isSuppressed } from './suppression.ts'
+import { unsubscribeHeaders } from './template.ts'
+import { unsubscribeUrl } from './token.ts'
 
 /**
  * Sending, and reading back.
@@ -92,11 +94,17 @@ const encodeHeader = (value: string) =>
 
 /** Plain text, always. No HTML part, no tracking pixel, no link rewriting. */
 function mime(from: string, to: string, subject: string, body: string) {
+  // Built here from the recipient rather than carried in from the caller, for
+  // the same reason the suppression check is repeated in this file: this is the
+  // function that produces what Gmail receives, so a message assembled by hand
+  // somewhere else cannot go out without a working one-click opt-out.
+  const optOut = Object.entries(unsubscribeHeaders(unsubscribeUrl(to)))
   return [
     `From: ${encodeHeader(from)}`,
     `To: ${to}`,
     `Subject: ${encodeHeader(subject)}`,
     `Date: ${new Date().toUTCString()}`,
+    ...optOut.map(([name, value]) => `${name}: ${value}`),
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset="utf-8"',
     'Content-Transfer-Encoding: base64',

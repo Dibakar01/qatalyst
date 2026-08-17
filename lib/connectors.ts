@@ -85,6 +85,22 @@ export const PRESETS: Record<string, { label: string; note: string; mapping: Map
 
 export type Preset = keyof typeof PRESETS
 
+/**
+ * How an import says it arrived through the push door.
+ *
+ * Load-bearing, not cosmetic: everything else that imports is either a
+ * signed-in operator or a source we called ourselves, and the push door is the
+ * one path whose caller holds nothing but `INGEST_SECRET` — a bearer token that
+ * lives pasted into a third-party exporter's settings screen. `runImport()`
+ * refuses a caller-asserted `email_status` from that path, because otherwise
+ * anyone holding the token can post `verified` and the address becomes
+ * immediately sendable with no verification having happened.
+ *
+ * Any future push endpoint must end its source with this, or it inherits a
+ * trust it has not earned.
+ */
+export const PUSH_SOURCE_SUFFIX = ':webhook'
+
 /* ── pull: Apollo ─────────────────────────────────────────────────────────── */
 
 const APOLLO = 'https://api.apollo.io/api/v1'
