@@ -6,10 +6,17 @@ import { connectors } from '../db/schema.ts'
 import { WINDOW } from '../lib/rules.ts'
 import { refreshPostmaster } from '../lib/domains.ts'
 import { readTick } from '../lib/inbox.ts'
-import { sendTick } from '../lib/send.ts'
+import { assertDbTimezone, sendTick, sendTz } from '../lib/send.ts'
 import { canPull, runSource } from '../lib/sources.ts'
 
 const EVERY = 60_000
+
+// Before the first tick, not during one. If the app and the database keep
+// different calendars the daily counters roll over at a different instant from
+// the window, and a cap is briefly spendable twice — which is invisible in the
+// logs and only shows up as a domain's reputation falling. Refusing to start is
+// the cheap end of that.
+await assertDbTimezone()
 
 /**
  * Pull every source that has not run today, once a day, on the same loop that
@@ -53,7 +60,7 @@ process.on('SIGINT', () => {
 })
 
 console.log(
-  `sender running — window ${String(WINDOW.start / 60).padStart(2, '0')}:00 to ${WINDOW.end / 60}:00 local, ctrl-c to stop`,
+  `sender running — window ${String(WINDOW.start / 60).padStart(2, '0')}:00 to ${WINDOW.end / 60}:00 ${sendTz()}, ctrl-c to stop`,
 )
 
 while (!stopping) {

@@ -29,12 +29,88 @@ import { suppressionIndex } from './suppression.ts'
 /** Rule 3: at most one send per mailbox per tick, so a backlog can never burst. */
 const PER_TICK = 1
 
-const minuteOfDay = (now: Date) => now.getHours() * 60 + now.getMinutes()
+/**
+ * The operator's timezone. Required, and deliberately without a default: a
+ * default is precisely how the sending window came to follow whichever clock the
+ * container happened to be started with. Read at the call rather than at import,
+ * so a module that only needs the pure helpers can be loaded without it.
+ */
+export function sendTz(): string {
+  const tz = process.env.SEND_TZ
+  if (!tz) {
+    throw new Error('SEND_TZ is not set — the sending window has no timezone to follow')
+  }
+  return tz
+}
 
-// The daily cap is a local-calendar-day cap, so compare against a local date
-// string rather than a UTC instant. Assumes app and database share a timezone.
-const localDay = (now: Date) =>
-  `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+/**
+ * Wall-clock fields in a named zone.
+ *
+ * `Intl` is the only thing in the platform that knows a zone's offset *on a
+ * given date*, which is what makes the two helpers below correct across a DST
+ * change rather than an hour out for half the year. An unknown zone throws here,
+ * loudly, rather than quietly falling back to the server's own.
+ */
+function zoned(now: Date, tz: string) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(now)
+  return Object.fromEntries(parts.map((p) => [p.type, p.value])) as Record<string, string>
+}
+
+/**
+ * Minutes since midnight in the operator's zone — the number the window is
+ * checked against.
+ *
+ * This read `Date.getHours()`, i.e. the Node process's timezone. The standard
+ * production shape is a container in UTC and an operator in IST, where a
+ * configured 09:00–17:00 window fired at 14:30–22:30 local: into the recipients'
+ * evening, which is the one thing the window exists to prevent.
+ */
+export function minuteOfDay(now: Date, tz: string): number {
+  const at = zoned(now, tz)
+  return Number(at.hour) * 60 + Number(at.minute)
+}
+
+/**
+ * The daily cap is a local-calendar-day cap, so the counters compare against a
+ * local date string rather than a UTC instant.
+ *
+ * The old comment here said "assumes app and database share a timezone" and
+ * nothing enforced it; `assertDbTimezone()` now does, at boot. If they disagree
+ * the counters reset at the wrong instant and a cap is briefly double-spendable
+ * across the boundary.
+ */
+export function localDay(now: Date, tz: string): string {
+  const at = zoned(now, tz)
+  return `${at.year}-${at.month}-${at.day}`
+}
+
+/**
+ * Refuse to start if the database is not keeping the operator's calendar.
+ *
+ * The counters filter on `sent_at::date`, and that cast uses the *session's*
+ * timezone — so a database in UTC rolls its day over at 05:30 IST while the app
+ * believes the day turned at midnight. Nothing about that is visible; it shows up
+ * as a cap that was briefly spendable twice. Cheaper to not boot.
+ */
+export async function assertDbTimezone(): Promise<void> {
+  const tz = sendTz()
+  const [row] = await sql<{ TimeZone: string }[]>`show timezone`
+  if (row?.TimeZone !== tz) {
+    throw new Error(
+      `database timezone is ${row?.TimeZone ?? 'unknown'} but SEND_TZ is ${tz} — ` +
+        'the daily counters would roll over at a different instant from the window. ' +
+        'Set the database session timezone to match, or correct SEND_TZ.',
+    )
+  }
+}
 
 export type TickResult = { sent: number; halted: string[]; dryRun: boolean; detail: string[] }
 
@@ -63,10 +139,10 @@ export async function allMailboxStats(now = new Date()): Promise<Map<string, Mai
     .select({
       mailboxId: messages.mailboxId,
       sentToday: raw<number>`count(*) filter (
-        where ${messages.sentAt}::date = ${localDay(now)}::date and ${messages.status} = 'sent'
+        where ${messages.sentAt}::date = ${localDay(now, sendTz())}::date and ${messages.status} = 'sent'
       )`.mapWith(Number),
       catchAllToday: raw<number>`count(*) filter (
-        where ${messages.sentAt}::date = ${localDay(now)}::date
+        where ${messages.sentAt}::date = ${localDay(now, sendTz())}::date
           and ${messages.status} = 'sent'
           and ${contacts.emailStatus} = 'catch_all'
       )`.mapWith(Number),
@@ -102,7 +178,7 @@ export async function allMailboxStats(now = new Date()): Promise<Map<string, Mai
       sent: raw<number>`count(*)`.mapWith(Number),
     })
     .from(warmups)
-    .where(raw`${warmups.sentAt}::date = ${localDay(now)}::date`)
+    .where(raw`${warmups.sentAt}::date = ${localDay(now, sendTz())}::date`)
     .groupBy(warmups.fromMailbox)
 
   if (warm.length > 0) {
@@ -135,7 +211,7 @@ export async function domainSentToday(now = new Date()): Promise<Map<string, num
     .select({
       domainId: mailboxes.domainId,
       sent: raw<number>`count(*) filter (
-        where ${messages.sentAt}::date = ${localDay(now)}::date and ${messages.status} = 'sent'
+        where ${messages.sentAt}::date = ${localDay(now, sendTz())}::date and ${messages.status} = 'sent'
       )`.mapWith(Number),
     })
     .from(messages)
@@ -156,7 +232,7 @@ export async function domainSentToday(now = new Date()): Promise<Map<string, num
     .from(warmups)
     .innerJoin(mailboxes, eq(mailboxes.email, warmups.fromMailbox))
     .where(
-      and(isNotNull(mailboxes.domainId), raw`${warmups.sentAt}::date = ${localDay(now)}::date`),
+      and(isNotNull(mailboxes.domainId), raw`${warmups.sentAt}::date = ${localDay(now, sendTz())}::date`),
     )
     .groupBy(mailboxes.domainId)
 
@@ -186,10 +262,10 @@ export async function mailboxStats(mailboxId: string, now = new Date()): Promise
   const [row] = await db
     .select({
       sentToday: raw<number>`count(*) filter (
-        where ${messages.sentAt}::date = ${localDay(now)}::date and ${messages.status} = 'sent'
+        where ${messages.sentAt}::date = ${localDay(now, sendTz())}::date and ${messages.status} = 'sent'
       )`.mapWith(Number),
       catchAllToday: raw<number>`count(*) filter (
-        where ${messages.sentAt}::date = ${localDay(now)}::date
+        where ${messages.sentAt}::date = ${localDay(now, sendTz())}::date
           and ${messages.status} = 'sent'
           and ${contacts.emailStatus} = 'catch_all'
       )`.mapWith(Number),
@@ -278,12 +354,15 @@ export async function sendTick(now = new Date()): Promise<TickResult> {
 
 async function runTick(now: Date): Promise<TickResult> {
   const result: TickResult = { sent: 0, halted: [], dryRun: !isConfigured(), detail: [] }
+  // Once per tick: every window decision in this pass must be made in the same
+  // zone, and read once so it cannot change halfway through.
+  const tz = sendTz()
 
   // Nothing goes out at the weekend, warm-up included. A mailbox sending cold
   // outreach on a Sunday at its weekday rate is a pattern no person produces,
   // and M3AAWG puts consistent human-shaped volume at the centre of how
   // reputation is judged.
-  if (!isSendingDay(now)) return result
+  if (!isSendingDay(now, tz)) return result
   // Each mailbox arrives with its domain, because the domain decides both the
   // credential to send with and how much of its cap has been earned so far.
   const boxes = await db
@@ -381,7 +460,7 @@ async function runTick(now: Date): Promise<TickResult> {
     }
 
     const allowance = Math.min(
-      allowanceNow(cap, counts.sentToday, minuteOfDay(now), rules),
+      allowanceNow(cap, counts.sentToday, minuteOfDay(now, tz), rules),
       domainLeft,
       PER_TICK,
     )
@@ -496,7 +575,7 @@ async function runTick(now: Date): Promise<TickResult> {
   // Whatever allowance the real post did not use, spent on earning the new
   // domains their reputation. After the loop deliberately: campaign mail always
   // takes precedence, and warm-up only ever fills what is left.
-  await warmTick(boxes, stats, perDomain, rules, now, result)
+  await warmTick(boxes, stats, perDomain, rules, now, tz, result)
 
   return result
 }
@@ -519,6 +598,7 @@ async function warmTick(
   perDomain: Map<string, number>,
   rules: Awaited<ReturnType<typeof tuning>>,
   now: Date,
+  tz: string,
   result: TickResult,
 ) {
   const warming = boxes.filter(
@@ -545,7 +625,7 @@ async function warmTick(
 
     const counts = stats.get(mailbox.id) ?? noStats()
     const cap = warmupCap(mailbox.dailyCap, daysSince(domain?.warmingSince ?? null, now))
-    const mine = allowanceNow(cap, counts.sentToday, minuteOfDay(now), rules)
+    const mine = allowanceNow(cap, counts.sentToday, minuteOfDay(now, tz), rules)
     const theirs = domain
       ? domainAllowance(domain.dailyCap, perDomain.get(domain.id) ?? 0)
       : Number.POSITIVE_INFINITY
