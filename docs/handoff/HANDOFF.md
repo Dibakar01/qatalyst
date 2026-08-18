@@ -544,6 +544,8 @@ two ever differed — which is also production's shape.
   own name; only the `Co-Authored-By: Claude` trailer distinguishes provenance.
 - Since the first green run, only `BOARD.md` and `PLAN.md` changed — **no source
   at all**, so the reviewed code and the mergeable code are the same artifact.
+  **SUPERSEDED that afternoon — `app/layout.tsx` (+28) landed in `60a579f`.
+  There IS source drift from the reviewed set now. See entry 4.**
 - Ship gate moved from 2 green / 2 amber / 4 red to **4 green / 2 amber / 2 red**;
   every remaining item is human or calendar work, none of it code.
 
@@ -561,6 +563,7 @@ THE BUILD IS DONE. Do not start new work. Read before acting:
 PR #1 is OPEN, MERGEABLE, CLEAN, green on its exact head (run 32057836648).
 Only BOARD.md and PLAN.md changed since the first green run — no source — so
 the reviewed code is unchanged and the merge is safe against drift.
+*** NO LONGER TRUE as of 60a579f — app/layout.tsx +28 is in the PR now. ***
 
 THE ONE REMAINING CODE ACTION, AND IT IS THE HUMAN'S:
   1. quit Antigravity IDE (auto-commits AND auto-pushes, ~40min timer)
@@ -586,6 +589,185 @@ HUMAN / CALENDAR, not code, not yours to guess at: start domain warm-up (3
 weeks, nothing shortens it), write the privacy notice (gates the pixel), show
 one other person the kill switch. Optional: hand the banked ecc:architect
 booking spec to Quest (quest.qalakaar.com owns that feature, not this repo).
+```
+
+---
+
+---
+
+## Handoff: 2026-08-18 PM (session: qatalyst-multiagent-setup — the app went down)
+
+### Current Task State
+
+Dibakar opened the app and every workspace render returned **"A server error
+occurred."** Root cause found, fixed, verified, committed, pushed, CI green.
+
+```
+branch      integration @ 60a579f, clean, pushed
+PR          #1  OPEN · MERGEABLE · CLEAN · head 60a579f
+CI          run 32121191415 — verify: 11 passed, 0 failed, 0 unverifiable
+app         workspace 200, 35KB, theme applies, console clean
+origin/main 8e4da58 — still unmerged, still Dibakar's call
+```
+
+### Key Decisions
+
+- **Add only `SEND_TZ` to `.env`, not the other four missing keys.** `.env` was
+  also missing `APOLLO_API_KEY`, `INGEST_SECRET`, `SITE_KEYS`, `SITE_ORIGINS`.
+  Every one is **fail-closed by design** — `.env.example` says so in its own
+  comments ("Unset means the door is shut", "Unset allows nobody"), and two are
+  blank in the example itself. Setting them blind would have *opened* endpoints
+  that are deliberately shut. Do not "fix" them without a reason per variable.
+- **Checked the database session timezone before choosing the value.** `SHOW
+  timezone` returned `Asia/Kolkata`, matching. Had it not, `assertDbTimezone()`
+  would have refused to boot the sender — trading a dead workspace for a dead
+  sender, and looking like a fix until someone tried to send.
+- **Kept the theme script in `<head>`.** The Next guide's "place it after the
+  element it modifies" applies to scripts patching *rendered content*; this one
+  sets `data-theme` on `documentElement`, which exists the moment `<html>` is
+  parsed. After `<body>` would reintroduce the flash it prevents.
+- **Documented the upgrade path, not just the fix.** The one-line `.env` edit
+  takes ten seconds; the deploy hazard it represents is the actual deliverable.
+
+### Modified Files
+
+- `.env` — **untracked, so this is NOT in git.** One appended line,
+  `SEND_TZ=Asia/Kolkata`. Any other checkout or box needs it added by hand.
+- `docs/runbook.md` — new "Upgrading an existing install" block under Deploy,
+  with the generic `comm -23` drift check between `.env.example` and `.env`
+- `README.md` — `SEND_TZ` in the setup line, plus a `> [!WARNING]` upgrade note
+- `app/layout.tsx` — `InlineScript` helper from this Next version's guide
+  (`preventing-flash-before-hydration.md`), silencing React's script-tag warning
+
+### Blockers / Open Questions
+
+1. **OPEN, unanswered, and Dibakar's to decide:** should a missing `SEND_TZ`
+   take down the **entire workspace**, or only the **sending path**? Today a
+   send-configuration variable 500s the whole dashboard — he could not look at
+   his contacts because the send window had no timezone. Fail-closed on sending
+   is clearly right; fail-closed on *rendering* is a heavier call, defensible
+   both ways (a dashboard that renders while sending is misconfigured can imply
+   things are fine when they are not). Scoping it is a change to `lib/send.ts`'s
+   failure boundary, not config. **Nobody has answered this. Do not assume.**
+2. **PR #1 now contains source beyond the originally reviewed set** —
+   `app/layout.tsx`, +28 lines. Entry 3's "no source drift" claim is marked
+   superseded above. The change is typechecked, linted, and has passed full CI
+   including `docker build .`, and a peer session read the diff and judged it
+   sound — but it did not go through the independent Phase 5 review the rest did.
+
+### Next Steps
+
+1. Quit Antigravity IDE.
+2. `gh pr merge 1 --squash --delete-branch` — **the human presses this.**
+3. Start domain warm-up — three weeks of calendar, unchanged, still the long pole.
+4. Privacy notice; walk one other person through the kill switch.
+5. Optional, low priority: two accessibility findings seen while the console was
+   open — the login password form has no username field, and a workspace form
+   field lacks `id`/`name`.
+
+### Critical Context
+
+**`SEND_TZ` is its own hazard class.** It is the only variable in this config
+that is *required*, has *no default*, and has *no fail-closed fallback*. Every
+other variable degrades quietly and deliberately when unset. This one takes the
+app down. Treat any future variable with those three properties the same way:
+it needs a deploy step, not just an `.env.example` line.
+
+**CI cannot catch this class of defect, structurally.** `ci.yml` sets `SEND_TZ`
+in its own `env:` block, so the pipeline was green through the entire outage. A
+green pipeline proves the code is correct *on a machine configured for it*. It
+proves nothing about whether any other machine is configured for it. Note the
+symmetry with last night: three defects were invisible **locally** and caught by
+CI; this one was invisible **to CI** and caught by a human opening the app.
+Neither substitutes for the other.
+
+**Config drift is silent by construction.** `.env` is gitignored, so `git pull`
+brings code that needs new variables and cannot touch the file that would supply
+them. `cp .env.example .env` is a fresh-install step nobody repeats. After any
+upgrade, run the drift check in `docs/runbook.md` — and read its output rather
+than glancing at it.
+
+**Verify the workspace, not `/login`.** `/login` returned 200 throughout the
+outage — it never imports `lib/send`. Only the authenticated page does
+(`app/(workspace)/page.tsx:35` → `mailboxStats`). A check that returns the same
+value on both sides of the defect verifies nothing. To reach the real page
+without handling the password: the session cookie is
+`sha256("qatalyst:$APP_PASSWORD")` hex, cookie name `qat`, and it is `httpOnly`
+so it cannot be set from JavaScript.
+
+### Model Summary
+
+- The app was down on every workspace render; `SEND_TZ` was required by the S4
+  fix, added to `.env.example`, and never added to the real untracked `.env`.
+- Fixed in `60a579f`; workspace verified rendering at 200 with the real
+  authenticated page, not a proxy for it.
+- **CI was green for the entire outage** — `ci.yml` supplies `SEND_TZ` itself.
+  This is the one defect class the pipeline cannot see.
+- **The deploy hazard is the real deliverable**, not the one-line edit:
+  production will hit this exact wall, so it is documented as an upgrade step in
+  both the runbook and the README with a generic drift check.
+- Four other `.env` keys are missing **by design** and fail closed; setting them
+  blind would open endpoints that are deliberately shut.
+- Checked `SHOW timezone` before choosing the value, or the fix would have
+  turned a dead workspace into a dead sender.
+- `SEND_TZ` is the only required + defaultless + no-fallback variable in the
+  config — its own hazard class, worth recognising in any future variable.
+- `app/layout.tsx` +28 uses the framework guide's own remedy; it means **PR #1
+  carries source drift from the reviewed set**, and entry 3's claim otherwise is
+  marked superseded rather than quietly edited.
+- The peer's reported symptom (theme lost on soft navigation) did **not**
+  reproduce: React never renders `data-theme`, so it never reconciles it away.
+- **Still open and nobody's to assume: should a missing `SEND_TZ` kill the whole
+  workspace or only sending?** Dibakar's call, unanswered.
+- Standing lesson from both halves of the day: **assert the effect, not the exit
+  code — and read the output of the check you just wrote.**
+
+### Handoff Context (paste into next session)
+
+```
+Repo: ~/Documents/Qalakaar/Qalakaar Qatalyst, branch `integration` @ 60a579f,
+clean and pushed. origin/main is still 8e4da58 — nothing merged.
+
+THE BUILD IS DONE AND THE APP IS UP. Do not start new work.
+
+Read: coordination/BOARD.md, coordination/PLAN.md, docs/runbook.md (its top
+section first — two commands TRUNCATE), and entries 3 and 4 of this file.
+
+PR #1: OPEN, MERGEABLE, CLEAN, green at 60a579f (run 32121191415, verify 11/0/0).
+It DOES contain source drift from the Phase 5 reviewed set: app/layout.tsx +28.
+
+THE ONE REMAINING CODE ACTION, AND IT IS THE HUMAN'S:
+  1. quit Antigravity IDE (auto-commits AND auto-pushes, ~40min timer)
+  2. gh pr merge 1 --squash --delete-branch     <- the human presses this
+A peer session was denied this by its permissions. That is not authorisation
+for anyone else to do it.
+
+UNANSWERED, DO NOT DECIDE IT ALONE: should a missing SEND_TZ 500 the whole
+workspace, or only the sending path? Dibakar's call. It is a change to
+lib/send.ts's failure boundary if he wants it scoped.
+
+IF THE APP IS DOWN AGAIN, CHECK CONFIG BEFORE CODE:
+  grep -q '^SEND_TZ=' .env || echo 'SEND_TZ=Asia/Kolkata' >> .env
+  psql "$DATABASE_URL" -tAc 'SHOW timezone'    # must equal SEND_TZ
+  comm -23 <(sed -n 's/^\([A-Z_][A-Z0-9_]*\)=.*/\1/p' .env.example | sort -u) \
+           <(sed -n 's/^\([A-Z_][A-Z0-9_]*\)=.*/\1/p' .env | sort -u)
+Most missing keys are fail-closed BY DESIGN — read .env.example's comment for
+each before setting it. SEND_TZ is the only one that takes the app down.
+Verify the AUTHENTICATED page, not /login: /login stays 200 while broken.
+
+HARD CONSTRAINTS (unchanged):
+- NEVER point verify.sh or test:acceptance at `qatalyst`. They TRUNCATE.
+  Use: DATABASE_URL="postgresql://$(whoami)@localhost:5432/qatalyst_scratch"
+- "Is it local?" is NOT the question. The production database is local.
+- Do not set GOOGLE_SERVICE_ACCOUNT_JSON. Sending is a dry run; that is the
+  safety property. Never send to an address you do not control.
+- No new runtime dependencies (D1). Do not symlink node_modules into worktrees.
+- Verify commit provenance by the Co-Authored-By trailer, never the author
+  name: the auto-committer signs as Dibakar Upadhyaya, same as Claude's.
+- Read node_modules/next/dist/docs/ before writing Next code (AGENTS.md).
+
+HUMAN / CALENDAR: start domain warm-up (3 weeks, nothing shortens it), write
+the privacy notice, show one other person the kill switch.
 ```
 
 ---
