@@ -3,7 +3,7 @@
 Written by the manager, from the lanes' status files. Nobody else edits this.
 
 **Phase 5 complete — independently verified. Awaiting the merge to `main`.**
-Build ran 2026-08-17 from `2208f3f`; `integration` is at `42e9338`.
+Build ran 2026-08-17 from `2208f3f`; `integration` is at `9ca3250`, pushed, PR #1 green.
 
 | lane | agent | branch | findings | commits | status |
 | --- | --- | --- | --- | --- | --- |
@@ -99,3 +99,10 @@ Was 2 green / 2 amber / 4 red at the start of the day.
    the same artifact.
 3. Human calendar items, out of this team's scope: start warm-up, write the privacy notice,
    walk one other person through the kill switch.
+
+---
+
+**2026-08-18 — handoff written, session closing.** Landed: CI green on four consecutive
+heads, the three PR-only defects fixed, README front page, `docs/handoff/HANDOFF.md`
+entry 3 complete (zero TODOs). Next: the human quits Antigravity and presses
+`gh pr merge 1 --squash --delete-branch`. Nothing else in this repo is waiting on an agent.
