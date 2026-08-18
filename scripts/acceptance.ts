@@ -8,13 +8,32 @@ import { db, sql } from '../db/index.ts'
 import { campaigns, contacts, events, mailboxes, messages, suppressions } from '../db/schema.ts'
 import { eraseContact, runImport } from '../lib/contacts.ts'
 import { addDomain } from '../lib/domains.ts'
-import { allMailboxStats, sendTick } from '../lib/send.ts'
+import { allMailboxStats, sendTick, sendTz } from '../lib/send.ts'
 import type { Mapping, Row } from '../lib/csv.ts'
 import { emailHash, isSuppressed, suppress } from '../lib/suppression.ts'
 import { makeToken, readToken } from '../lib/token.ts'
 
 // This truncates tables. Never let it point at anything but a dev database.
-if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? '')) {
+//
+// S8: the old check was `/@(localhost|127\.0\.0\.1)[:/]/`, which requires an
+// `@` — so `postgresql://localhost:5432/db`, the Homebrew default with no
+// username, was refused even though it is local. It failed closed, which is
+// the right direction, but a safety rail that blocks legitimate use is one
+// somebody eventually edits, and this one guards a TRUNCATE. Parse the URL
+// properly instead; keep failing closed on anything that does not parse.
+//
+// scripts/verify.sh step 1 runs the same check, on purpose — kept in sync by
+// hand rather than shared through a module, since it is three lines.
+export function isLocalDatabaseUrl(url: string): boolean {
+  try {
+    const { hostname } = new URL(url)
+    return hostname === 'localhost' || hostname === '127.0.0.1'
+  } catch {
+    return false
+  }
+}
+
+if (!isLocalDatabaseUrl(process.env.DATABASE_URL ?? '')) {
   throw new Error('refusing to run: DATABASE_URL is not local')
 }
 
@@ -155,16 +174,63 @@ await db.insert(messages).values(
 // Sunday at its weekday rate is a pattern no person produces. That made this
 // suite pass Monday to Friday and fail on Saturday, which is the definition of
 // a flaky test: the same code, a different answer, depending on the calendar.
-const nextWeekday = () => {
-  const d = new Date()
-  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1)
-  return d
+// ...and a fixed wall-clock time, both read in the OPERATOR's timezone rather
+// than the server's.
+//
+// The original built these with `new Date()` + `setHours()`, which resolve in
+// whatever zone the process happens to run in. That is the exact assumption S4
+// removed from lib/send.ts, and leaving it here meant the suite only agreed with
+// the sender when the two coincided: green on an IST laptop, red on a UTC runner,
+// where 07:00 UTC is 12:30 IST — inside the window, so the sender correctly sent
+// and the assertion correctly failed. The same code, a different answer,
+// depending on the machine: the calendar flake described above, one layer down.
+//
+// The weekday is resolved in `tz` too, because a Friday on the server can be a
+// Saturday for the operator, and the sender's weekend rule follows the operator.
+const atSendTime = (hour: number, minute = 0) => {
+  const tz = sendTz()
+  const partsIn = (at: Date) =>
+    Object.fromEntries(
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: tz,
+        hour12: false,
+        weekday: 'short',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      })
+        .formatToParts(at)
+        .map((part) => [part.type, part.value]),
+    )
+
+  let probe = new Date()
+  let day = partsIn(probe)
+  while (day.weekday === 'Sat' || day.weekday === 'Sun') {
+    probe = new Date(probe.getTime() + 86_400_000)
+    day = partsIn(probe)
+  }
+
+  // The instant whose UTC digits are the wall time we want...
+  const wall = Date.UTC(+day.year, +day.month - 1, +day.day, hour, minute)
+  // ...then corrected by what that instant actually reads as in `tz`, which is
+  // the zone's offset at that moment, DST included.
+  const shownAt = partsIn(new Date(wall))
+  const shown = Date.UTC(
+    +shownAt.year,
+    +shownAt.month - 1,
+    +shownAt.day,
+    +shownAt.hour % 24,
+    +shownAt.minute,
+    +shownAt.second,
+  )
+  return new Date(wall - (shown - wall))
 }
 
-const noon = nextWeekday()
-noon.setHours(12, 0, 0, 0)
-const early = nextWeekday()
-early.setHours(7, 0, 0, 0)
+const noon = atSendTime(12)
+const early = atSendTime(7)
 
 assert.equal((await sendTick(early)).sent, 0, 'nothing goes out before the window opens')
 ok('outside the sending window nothing is sent')
@@ -233,8 +299,7 @@ ok('suppression stops a delivery at send time, not just at import')
     select id::text from mailboxes where email = ${box}`)
 
   // Late in the window, so the ramp has released most of the day's allowance.
-  const late = nextWeekday()
-  late.setHours(16, 30, 0, 0)
+  const late = atSendTime(16, 30)
 
   for (let i = 0; i < 12; i++) await sendTick(late)
 

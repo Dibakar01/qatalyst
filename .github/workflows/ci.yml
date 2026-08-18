@@ -14,6 +14,10 @@ jobs:
         image: postgres:17
         env:
           POSTGRES_PASSWORD: postgres
+          # A purpose-made database rather than the `postgres` maintenance one,
+          # so verify.sh's disposable-database allowlist need not carry an
+          # exception for it. The image creates this on first start.
+          POSTGRES_DB: qatalyst_ci
         ports: ['5432:5432']
         options: >-
           --health-cmd pg_isready
@@ -22,10 +26,14 @@ jobs:
           --health-retries 10
 
     env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/qatalyst_ci
       UNSUBSCRIBE_SECRET: ci-only-secret
       APP_PASSWORD: ci-only-password
       UNSUBSCRIBE_BASE_URL: http://localhost:3000
+      # S4: required, no default — assertDbTimezone() refuses to start
+      # without it once core lands. Also read directly by the tz-aware
+      # regression checks in lib/lib.test.ts.
+      SEND_TZ: Asia/Kolkata
 
     steps:
       - uses: actions/checkout@v7
@@ -34,11 +42,37 @@ jobs:
           node-version: 24
           cache: npm
 
+      # The runner ships pg_dump 16; the service container above is Postgres 17,
+      # and pg_dump refuses to dump a server newer than itself. That fails
+      # `npm run verify`'s S7 backup step — and the fix is to match the client to
+      # the server, not to pin the server down to the runner, because production
+      # is 17 and a backup tool that cannot read production is not a backup tool.
+      - name: Install postgresql-client 17 (match the service container)
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+          # Installing it is not enough: /usr/bin/pg_dump is pg_wrapper, which
+          # resolves to the DEFAULT cluster's version (16 here), not the newest
+          # installed. The real binaries are versioned, so put 17's ahead on PATH.
+          echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
+          /usr/lib/postgresql/17/bin/pg_dump --version
+
       - run: npm ci
       - run: npm run lint
-      - run: npm test
+      # Migrate before test: lib/lib.test.ts now has a section (S1/S4/S6)
+      # that opens a real database connection, so the schema has to exist
+      # before `npm test` runs, not after.
       - run: npm run db:migrate
+      - run: npm test
       # The phase 1 acceptance criteria: idempotent import, erasure that keeps
       # the suppression, tokens that only verify under our own secret.
       - run: npm run test:acceptance
+      # See coordination/CONTRACTS.md §4. Red on this branch until core and
+      # ops land their pieces — that is the point (PLAN.md D5).
+      - run: npm run verify
       - run: npm run build

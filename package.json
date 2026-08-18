@@ -18,7 +18,10 @@
     "token": "node --env-file-if-exists=.env scripts/token.ts",
     "send": "node --env-file-if-exists=.env scripts/send.ts",
     "load": "node --env-file-if-exists=.env scripts/load.ts",
-    "estate": "node --env-file-if-exists=.env scripts/estate.ts"
+    "estate": "node --env-file-if-exists=.env scripts/estate.ts",
+    "verify": "bash scripts/verify.sh",
+    "backup": "bash scripts/backup.sh",
+    "restore": "bash scripts/restore.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",

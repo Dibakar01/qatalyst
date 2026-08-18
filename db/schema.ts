@@ -27,6 +27,12 @@ export const messageStatus = pgEnum('message_status', [
   'draft',
   'flagged',
   'approved',
+  // Claimed by a sender and handed to the wire. The row leaves 'approved' before
+  // Gmail is called and is never re-selected, so a process that dies mid-send
+  // strands one row here instead of delivering the mail a second time. A row
+  // sitting in 'sending' is a question for an operator; a duplicate cold email
+  // is a burned prospect and a burned domain.
+  'sending',
   'sent',
   'bounced',
   'replied',

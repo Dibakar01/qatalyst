@@ -1,0 +1,21 @@
+# Keeps secrets out of the build context entirely (see Dockerfile) and keeps
+# the context upload small. node_modules in a worktree checkout is a symlink
+# to a sibling directory outside this build context — excluded so COPY . .
+# never has to reason about it; the deps stage runs a real npm ci instead.
+node_modules
+.git
+.next
+out
+coverage
+
+.env
+.env.*
+!.env.example
+
+backups
+docs/handoff
+coordination
+*.log
+npm-debug.log*
+
+.DS_Store

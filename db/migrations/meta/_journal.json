@@ -120,6 +120,13 @@
       "when": 1786811452555,
       "tag": "0016_amused_greymalkin",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1786982319913,
+      "tag": "0017_nasty_talon",
+      "breakpoints": true
     }
   ]
 }

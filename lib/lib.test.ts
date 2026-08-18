@@ -1,6 +1,8 @@
-// node --test lib/*.test.ts  — pure functions only, no database.
+// node --test lib/*.test.ts  — mostly pure functions; the S1/S4/S6 section
+// near the end also touches a real database (see the comment there).
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { eq } from 'drizzle-orm'
 
 process.env.UNSUBSCRIBE_SECRET = 'test-secret'
 
@@ -159,12 +161,26 @@ test('gaps in a template are reported rather than shipped silently', () => {
   ])
 })
 
-test('every assembled body carries an opt-out sentence and the link', () => {
-  const body = assembleBody('Hi Ada,\n\nSomething specific.', 'https://u.example/abc')
+test('S9: every assembled body carries an opt-out sentence, the link, and a working List-Unsubscribe header', () => {
+  // Inverted from "no List-Unsubscribe header" (PLAN.md D7). The 5,000/day
+  // Gmail threshold is real and 1,000/day total is nowhere near it, but the
+  // bulk-sender classification is permanent once crossed and subdomains roll
+  // up to the parent — a few lines here is cheap against an irreversible
+  // mistake, and enforcement ramped in November 2025. RFC 8058: exactly one
+  // HTTPS link, and the one-click POST form, so a mail client's own
+  // "Unsubscribe" button works without a human choosing to click through.
+  //
+  // assembleBody() returns { body, headers } rather than a plain string, since
+  // RFC 8058 headers cannot live inside a plain-text body a person reads.
+  // Reconciled at integration: this lane had assumed `text` and core landed
+  // `body`, because CONTRACTS.md §3.2 froze the behaviour and not the return
+  // shape. `body` wins — the function is assembleBody and the rest of the
+  // codebase calls it a body.
+  const { body, headers } = assembleBody('Hi Ada,\n\nSomething specific.', 'https://u.example/abc')
   assert.match(body, /would rather I did not write again/)
   assert.ok(body.includes('https://u.example/abc'))
-  // Rule 4: no List-Unsubscribe headers anywhere near a person-to-person email.
-  assert.doesNotMatch(body, /List-Unsubscribe/i)
+  assert.equal(headers['List-Unsubscribe'], '<https://u.example/abc>', 'exactly one HTTPS link, angle-bracketed per RFC 2369')
+  assert.equal(headers['List-Unsubscribe-Post'], 'List-Unsubscribe=One-Click', 'RFC 8058 one-click form')
 })
 
 /* validators -------------------------------------------------------------- */
@@ -1446,4 +1462,205 @@ test('a page size off the wire is treated as a stranger typed it', () => {
   assert.equal(readRows('; drop table contacts'), ROWS)
   assert.equal(readRows(undefined), ROWS, 'nobody has measured anything yet')
   assert.equal(readRows(''), ROWS, 'empty is not zero')
+})
+
+/* claim-before-send, the window in a real zone, and webhook trust (S1/S4/S6)
+   ---------------------------------------------------------------------------
+   Everything below touches the database, unlike the rest of this file — the
+   claim in S1 is a single SQL statement, not a pure function, and there is no
+   faking that without a database. Each test skips itself when DATABASE_URL is
+   not set rather than taking every pure test above down with it at import.
+
+   `claimForSend`, `minuteOfDay(now, tz)` and `localDay(now, tz)` are the
+   frozen signatures in coordination/CONTRACTS.md §2. None of them exist yet
+   at this commit — claimForSend is not exported, and minuteOfDay/localDay
+   still read the ambient clock instead of taking a zone — so every test below
+   fails today. That is the point: this is the harness proving S1 and S4 are
+   still open, the same way it will prove they are closed once core lands. */
+
+const hasDb = Boolean(process.env.DATABASE_URL)
+const send = hasDb ? await import('./send.ts') : null
+const contactsLib = hasDb ? await import('./contacts.ts') : null
+const dbIndex = hasDb ? await import('../db/index.ts') : null
+const dbSchema = await import('../db/schema.ts')
+const { PRESETS: presets } = await import('./connectors.ts')
+
+// db/index.ts caches its postgres pool on globalThis and never closes it —
+// the same shape as S2's db:seed bug. Every other script that imports it
+// closes `sql` itself at the end (scripts/acceptance.ts's `await sql.end()`,
+// mirrored here) or is a long-running server where that is correct. A test
+// run is neither: without this, `node --test` never drains and hangs forever
+// after the last test finishes, however it was invoked.
+if (hasDb) {
+  test.after(async () => {
+    await dbIndex!.sql.end()
+  })
+}
+
+/** Every test below starts here — one line instead of repeating the check. */
+function skipWithoutDb(t: import('node:test').TestContext): boolean {
+  if (hasDb) return false
+  t.skip('requires DATABASE_URL (see lib/send.ts, which db/index.ts is imported into)')
+  return true
+}
+
+/** A weekday at a fixed local hour, never "today" — acceptance.ts learned the
+ *  hard way that a fixed calendar day makes this suite pass Monday to Friday
+ *  and fail on Saturday, which is a flaky test wearing a straight face. */
+function weekdayAt(hour: number): Date {
+  const d = new Date()
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1)
+  d.setHours(hour, 0, 0, 0)
+  return d
+}
+
+test('S1: claimForSend refuses a row that is not `approved`', async (t) => {
+  if (skipWithoutDb(t)) return
+  const { db } = dbIndex!
+  const { contacts, campaigns, messages } = dbSchema
+  const [contact] = await db
+    .insert(contacts)
+    .values({ email: `s1a-${crypto.randomUUID()}@example.test` })
+    .returning()
+  const [campaign] = await db.insert(campaigns).values({ name: `S1a ${crypto.randomUUID()}` }).returning()
+  const [message] = await db
+    .insert(messages)
+    .values({ campaignId: campaign.id, contactId: contact.id, status: 'sent' })
+    .returning()
+
+  const result = await send!.claimForSend(message.id)
+  assert.equal(result.claimed, false, 'a row that is not approved must never be claimable')
+})
+
+test('S1: a row stuck in `sending` — a crash marker — is never re-selected by a later tick', async (t) => {
+  if (skipWithoutDb(t)) return
+  const { db } = dbIndex!
+  const { contacts, campaigns, messages, mailboxes, events } = dbSchema
+  const tag = crypto.randomUUID()
+  await db.insert(mailboxes).values({ email: `s1b-${tag}@qalakaar.test` })
+  const [contact] = await db
+    .insert(contacts)
+    .values({ email: `s1b-${tag}@example.test`, emailStatus: 'verified' })
+    .returning()
+  const [campaign] = await db.insert(campaigns).values({ name: `S1b ${tag}`, status: 'sending' }).returning()
+  const [stuck] = await db
+    .insert(messages)
+    .values({ campaignId: campaign.id, contactId: contact.id, status: 'sending', subject: 'x', body: 'y' })
+    .returning()
+
+  await send!.sendTick(weekdayAt(12))
+
+  const [after] = await db.select().from(messages).where(eq(messages.id, stuck.id))
+  assert.equal(after.status, 'sending', 'a stuck row is an operator question, not something the sender retries by itself')
+  assert.equal(after.attempts, 0, 'never even touched — not one failed attempt was recorded against it')
+  assert.equal(
+    (await db.select().from(events).where(eq(events.messageId, stuck.id))).length,
+    0,
+    'never delivered a second time',
+  )
+})
+
+test('S1: a message claimed once cannot be claimed a second time', async (t) => {
+  if (skipWithoutDb(t)) return
+  // This is the subtlest of the three checks, and the one most likely to
+  // regress: the bug it guards against is not a row stuck mid-flight, it is
+  // Gmail genuinely accepting a message and a *later* step throwing — the
+  // metadata read in lib/gmail.ts, today, at :148 and :153 — after which the
+  // row must never be eligible for another delivery attempt. There is no way
+  // to force that exact throw without a live Gmail credential, which this
+  // build deliberately has none of. What is testable, and what actually
+  // stands between that throw and a duplicate email, is this: once a row has
+  // been claimed out of `approved`, a second claim for the same id — exactly
+  // what a retried tick would attempt after a crash or a thrown error —
+  // always fails.
+  const { db } = dbIndex!
+  const { contacts, campaigns, messages } = dbSchema
+  const [contact] = await db
+    .insert(contacts)
+    .values({ email: `s1c-${crypto.randomUUID()}@example.test` })
+    .returning()
+  const [campaign] = await db.insert(campaigns).values({ name: `S1c ${crypto.randomUUID()}` }).returning()
+  const [message] = await db
+    .insert(messages)
+    .values({ campaignId: campaign.id, contactId: contact.id, status: 'approved' })
+    .returning()
+
+  const first = await send!.claimForSend(message.id)
+  assert.equal(first.claimed, true, 'an approved row is claimable once')
+
+  const second = await send!.claimForSend(message.id)
+  assert.equal(second.claimed, false, 'a second claim for the same id must always fail')
+})
+
+test("S4: the sending window is judged in the operator's zone, not the server's — a UTC clock reading 14:30 is not inside 09:00–17:00 once read correctly in Asia/Kolkata", async (t) => {
+  if (skipWithoutDb(t)) return
+  // The standard production shape: a container in UTC, an operator in IST.
+  // At this instant a server's own ambient clock reads 14:30 — squarely
+  // inside a naive 09:00–17:00 check, which is exactly how the old
+  // `now.getHours()` version of minuteOfDay got this wrong. The same instant
+  // is 20:00 in Asia/Kolkata: sending into the recipients' evening, which is
+  // precisely what the window exists to prevent.
+  const now = new Date('2026-06-16T14:30:00Z')
+
+  const ambient = send!.minuteOfDay(now, 'UTC')
+  assert.equal(ambient, 14 * 60 + 30)
+  assert.ok(
+    ambient >= WINDOW.start && ambient < WINDOW.end,
+    "sanity: a server whose own clock reads 14:30 would call this inside 09:00–17:00",
+  )
+
+  const real = send!.minuteOfDay(now, 'Asia/Kolkata')
+  assert.equal(real, 20 * 60, 'the same instant is 20:00 in Asia/Kolkata')
+  assert.ok(
+    real >= WINDOW.end,
+    'a 09:00–17:00 window must not fire at what the operator would call 20:00',
+  )
+})
+
+test('S4: minuteOfDay and localDay follow the real wall clock across a DST boundary, not a fixed offset', async (t) => {
+  if (skipWithoutDb(t)) return
+  // America/New_York springs forward at 2026-03-08 02:00 local (07:00 UTC):
+  // the wall clock jumps straight from 01:59:59 to 03:00:00. A fixed-offset
+  // calculation would see one UTC minute pass and report one local minute
+  // passing; the real clock jumps by 61 — only testable because these
+  // functions now take the zone as an argument instead of reading it from the
+  // process, which is what let them agree with `Intl.DateTimeFormat` (and
+  // therefore the IANA tzdata that knows this date moved) instead of
+  // guessing with a fixed offset.
+  const before = new Date('2026-03-08T06:59:00Z')
+  const at = new Date('2026-03-08T07:00:00Z')
+
+  assert.equal(send!.minuteOfDay(before, 'America/New_York'), 1 * 60 + 59)
+  assert.equal(send!.minuteOfDay(at, 'America/New_York'), 3 * 60)
+  assert.equal(send!.localDay(before, 'America/New_York'), '2026-03-08')
+  assert.equal(send!.localDay(at, 'America/New_York'), '2026-03-08')
+})
+
+test('S6: a webhook payload cannot assert its way to a sendable status', async (t) => {
+  if (skipWithoutDb(t)) return
+  // The evaboot and apollo_csv presets (lib/connectors.ts) are literally the
+  // mapping app/api/ingest/[preset]/route.ts uses — a caller holding only
+  // INGEST_SECRET, not our own verifier, posts rows in this exact shape and
+  // that route passes them straight to runImport() with a source ending in
+  // `:webhook`. That suffix is the one signal that already exists to tell an
+  // automated post apart from a person uploading their own trusted export —
+  // mapRow() itself must keep trusting `email_status` for that trusted case,
+  // which is why "a row in each exporter's own column names survives
+  // mapping" above still expects PRESETS.evaboot to read 'verified' straight
+  // through. This is the untrusted path, and it must not.
+  const { runImport } = contactsLib!
+  const email = `s6-${crypto.randomUUID()}@example.test`
+  const row = { 'First Name': 'Eve', Email: email, 'Email Status': 'Verified' }
+
+  const counts = await runImport(presets.evaboot.mapping, [row], 'evaboot:webhook')
+  assert.equal(counts.new, 1, 'sanity: the row was actually imported')
+
+  const { db } = dbIndex!
+  const { contacts } = dbSchema
+  const [contact] = await db.select().from(contacts).where(eq(contacts.email, email))
+  assert.notEqual(
+    contact.emailStatus,
+    'verified',
+    'a caller holding only INGEST_SECRET cannot assert verified — only our own verifier may',
+  )
 })

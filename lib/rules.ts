@@ -23,7 +23,15 @@ export const WINDOW = { start: 9 * 60, end: 17 * 60 }
  *
  * https://www.m3aawg.org/SendingDomsBCP
  */
-export function isSendingDay(now = new Date()) {
+export function isSendingDay(now = new Date(), tz?: string) {
+  // With a zone, the operator's calendar rather than the server's: a container
+  // in UTC at 23:00 on Friday is already Saturday morning in IST, and it is the
+  // recipient's Saturday the rule is about. Optional because the capacity
+  // estimate below only counts weekdays and has no operator to speak of.
+  if (tz) {
+    const day = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(now)
+    return day !== 'Sat' && day !== 'Sun'
+  }
   const day = now.getDay()
   return day >= 1 && day <= 5
 }

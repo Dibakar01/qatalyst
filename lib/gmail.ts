@@ -1,6 +1,8 @@
 import { createSign } from 'node:crypto'
 import { credentialFor } from './domains.ts'
 import { isSuppressed } from './suppression.ts'
+import { unsubscribeHeaders } from './template.ts'
+import { unsubscribeUrl } from './token.ts'
 
 /**
  * Sending, and reading back.
@@ -92,11 +94,17 @@ const encodeHeader = (value: string) =>
 
 /** Plain text, always. No HTML part, no tracking pixel, no link rewriting. */
 function mime(from: string, to: string, subject: string, body: string) {
+  // Built here from the recipient rather than carried in from the caller, for
+  // the same reason the suppression check is repeated in this file: this is the
+  // function that produces what Gmail receives, so a message assembled by hand
+  // somewhere else cannot go out without a working one-click opt-out.
+  const optOut = Object.entries(unsubscribeHeaders(unsubscribeUrl(to)))
   return [
     `From: ${encodeHeader(from)}`,
     `To: ${to}`,
     `Subject: ${encodeHeader(subject)}`,
     `Date: ${new Date().toUTCString()}`,
+    ...optOut.map(([name, value]) => `${name}: ${value}`),
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset="utf-8"',
     'Content-Transfer-Encoding: base64',
@@ -105,11 +113,37 @@ function mime(from: string, to: string, subject: string, body: string) {
   ].join('\r\n')
 }
 
-export type Delivery = { messageIdHeader: string; dryRun: boolean }
+export type Delivery = {
+  /**
+   * Gmail's own id for the accepted message — the handle `messageIdFor` needs to
+   * read the RFC 5322 Message-ID back. Null on a dry run, where nothing was sent.
+   */
+  gmailId: string | null
+  /** Known at once only on a dry run. Otherwise read back afterwards, best effort. */
+  messageIdHeader: string | null
+  dryRun: boolean
+}
 
 /**
- * The wire. Rule 1's check runs again here, inside the transport, so no future
- * caller can reach Gmail without passing it — not even by mistake.
+ * Gmail refused the message, so it is certain nothing reached the recipient and
+ * the caller may safely queue it again.
+ *
+ * Anything else thrown out of `deliver()` leaves the outcome *unknown* — a socket
+ * that died mid-request may still have been accepted — and an unknown outcome is
+ * never retried. A stranded row costs an operator a question; a duplicate cold
+ * email costs the prospect and the domain's reputation.
+ */
+export class Refused extends Error {}
+
+/**
+ * The wire, and only the wire. Rule 1's check runs again here, inside the
+ * transport, so no future caller can reach Gmail without passing it — not even
+ * by mistake.
+ *
+ * This returns the moment Gmail accepts the message. Reading the Message-ID back
+ * used to happen here too, and a failure in that read threw *after* the mail had
+ * gone: the caller booked it as a failure and sent the same cold email again.
+ * That read is `messageIdFor`, called after the send has been recorded.
  */
 export async function deliver(
   from: string,
@@ -120,7 +154,7 @@ export async function deliver(
   /** Practice: run everything, deliver nothing. */
   practice = false,
 ): Promise<Delivery> {
-  if (await isSuppressed(to)) throw new Error(`refused: ${to} is suppressed`)
+  if (await isSuppressed(to)) throw new Refused(`refused: ${to} is suppressed`)
 
   // Checked here rather than at the caller, for the same reason suppression is:
   // this is the function that talks to Gmail, so a caller written in a hurry
@@ -128,29 +162,66 @@ export async function deliver(
   const account = practice ? null : credentials(credentialKey)
   if (!account) {
     // No credentials configured: record what would have been sent and move on.
-    return { messageIdHeader: `<dry-run.${crypto.randomUUID()}@qatalyst.local>`, dryRun: true }
+    return {
+      gmailId: null,
+      messageIdHeader: `<dry-run.${crypto.randomUUID()}@qatalyst.local>`,
+      dryRun: true,
+    }
   }
 
-  const token = await accessToken(account, from)
+  // The token exchange is strictly before the wire, so its failure is a refusal:
+  // nothing was offered to Gmail at all.
+  let token: string
+  try {
+    token = await accessToken(account, from)
+  } catch (cause) {
+    throw new Refused(cause instanceof Error ? cause.message : String(cause))
+  }
+
+  // Deliberately not wrapped: if this fetch rejects, the request may still have
+  // been accepted, and that ambiguity must reach the caller as an unknown rather
+  // than as permission to send again.
   const sent = await fetch(`${API}/send`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify({ raw: b64url(mime(from, to, subject, body)) }),
   })
-  if (!sent.ok) throw new Error(`gmail send failed: ${sent.status} ${await sent.text()}`)
+  if (!sent.ok) throw new Refused(`gmail send failed: ${sent.status} ${await sent.text()}`)
   const { id } = (await sent.json()) as { id: string }
 
-  // Rule 6. Gmail assigns the Message-ID, so read it back rather than guess —
-  // without it, phase 4 cannot match a reply or a bounce to what we sent.
-  const meta = await fetch(`${API}/${id}?format=metadata&metadataHeaders=Message-ID`, {
-    headers: { authorization: `Bearer ${token}` },
-  })
-  if (!meta.ok) throw new Error(`gmail metadata failed: ${meta.status}`)
-  const payload = (await meta.json()) as {
-    payload?: { headers?: { name: string; value: string }[] }
-  }
-  const header = payload.payload?.headers?.find((h) => h.name.toLowerCase() === 'message-id')?.value
-  if (!header) throw new Error('gmail did not return a Message-ID')
+  return { gmailId: id, messageIdHeader: null, dryRun: false }
+}
 
-  return { messageIdHeader: header, dryRun: false }
+/**
+ * Rule 6's read-back. Gmail assigns the Message-ID, so it can only be read after
+ * the message is accepted — without it, phase 4 cannot match a reply or a bounce
+ * to what we sent.
+ *
+ * Best effort, and never throws: by the time this runs the mail has already gone,
+ * so there is nothing left to undo and no failure here is worth reporting as a
+ * failed send. A missing Message-ID costs one unmatched reply. Treating it as a
+ * failed send cost the prospect three copies of the same cold email.
+ */
+export async function messageIdFor(
+  from: string,
+  gmailId: string,
+  credentialKey?: string | null,
+): Promise<string | null> {
+  try {
+    const account = credentials(credentialKey)
+    if (!account) return null
+    const token = await accessToken(account, from)
+    const meta = await fetch(`${API}/${gmailId}?format=metadata&metadataHeaders=Message-ID`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    if (!meta.ok) return null
+    const payload = (await meta.json()) as {
+      payload?: { headers?: { name: string; value: string }[] }
+    }
+    return (
+      payload.payload?.headers?.find((h) => h.name.toLowerCase() === 'message-id')?.value ?? null
+    )
+  } catch {
+    return null
+  }
 }
