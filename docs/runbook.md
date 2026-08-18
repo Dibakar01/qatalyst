@@ -78,6 +78,42 @@ docker build .               # sanity check: the image builds clean
 docker compose up -d         # starts reacher + the worker
 ```
 
+### Upgrading an existing install — the step that is easy to miss
+
+The block above is a *fresh* install. On an upgrade `.env` already exists, is
+gitignored, and nothing migrates it: `git pull` brings new code that requires new
+variables, and leaves the file that would satisfy them untouched.
+
+**`SEND_TZ` is the one that bites**, because it is the only variable in the whole
+config that is required, has no default, and has no fail-closed fallback. Every
+other addition degrades quietly by design — `INGEST_SECRET` unset shuts the door,
+`SITE_ORIGINS` unset allows nobody. `SEND_TZ` unset returns a server error and
+the workspace does not render at all.
+
+```sh
+# run on every box, every upgrade, before restarting anything
+grep -q '^SEND_TZ=' .env || echo 'SEND_TZ=Asia/Kolkata' >> .env
+psql "$DATABASE_URL" -tAc 'SHOW timezone'   # must equal SEND_TZ
+```
+
+This happened locally on 2026-08-18: the S4 fix made `SEND_TZ` mandatory,
+`.env.example` gained it, the real `.env` did not, and the app went down while
+**CI stayed green** — because `ci.yml` sets `SEND_TZ` explicitly in its own `env:`
+block. A passing pipeline says the code is correct on a machine configured for
+it. It says nothing about whether any other machine is configured for it.
+
+More generally, after any upgrade:
+
+```sh
+# names present in the example but missing from this box's .env
+comm -23 <(sed -n 's/^\([A-Z_][A-Z0-9_]*\)=.*/\1/p' .env.example | sort -u) \
+         <(sed -n 's/^\([A-Z_][A-Z0-9_]*\)=.*/\1/p' .env | sort -u)
+```
+
+Read the result rather than glancing at it. Most entries are optional and safe to
+leave unset; check each against `.env.example`'s comment, which says what unset
+means for that variable.
+
 `docker compose up -d` starts `reacher` (the email verifier, needs outbound
 port 25 — see `docker-compose.yml`'s own comment) and `worker` (`npm run
 send`, `restart: always`). It does **not** start the app itself — `next

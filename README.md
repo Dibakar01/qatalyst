@@ -324,13 +324,27 @@ standard wire protocol, not a vendor-specific one.
 
 ```sh
 brew install postgresql@17 && brew services start postgresql@17 && createdb qatalyst
-cp .env.example .env      # DATABASE_URL, APP_PASSWORD, UNSUBSCRIBE_SECRET
+cp .env.example .env      # DATABASE_URL, APP_PASSWORD, UNSUBSCRIBE_SECRET, SEND_TZ
 npm install
 npm run db:migrate
 npm run db:seed
 npm run db:demo           # optional: sample contacts so the UI has something in it
 npm run dev               # http://localhost:3000
 ```
+
+> [!WARNING]
+> **Upgrading an existing checkout? Your `.env` will not be updated for you.**
+> `SEND_TZ` is required and has no default — the workspace returns a server
+> error without it, not a degraded page. `.env` is gitignored, so `git pull`
+> never touches it and `cp .env.example .env` is a fresh-install step nobody
+> repeats. Add it by hand:
+>
+> ```sh
+> grep -q '^SEND_TZ=' .env || echo 'SEND_TZ=Asia/Kolkata' >> .env
+> ```
+>
+> It must match the database session timezone (`SHOW timezone`) or the sender
+> refuses to boot — that check is deliberate, see `lib/send.ts:assertDbTimezone`.
 
 Two more credentials unlock the later phases. Without either, the app still runs
 and tells you what it would have done:
