@@ -395,3 +395,197 @@ nothing shortens it), write the privacy notice, show one person the kill switch.
 ```
 
 ---
+---
+
+## Handoff: 2026-08-18T08:19:15Z (session: qatalyst-multiagent-setup — deliberate, at the seam)
+
+### Compaction Metadata
+- Trigger: manual
+- Custom instructions: (none)
+- Transcript: /Users/dibakar/.claude/projects/-Users-dibakar-Documents-Qalakaar-Qalakaar-Qatalyst/69e87905-a74c-4a4e-9ce5-dd87e5b5bfc4.jsonl
+- CWD: /Users/dibakar/Documents/Qalakaar/Qalakaar Qatalyst
+
+### Last User Message (transcript tail)
+(unavailable)
+
+### Last Assistant Message (transcript tail)
+Everything is recorded in `coordination/PLAN.md` and `BOARD.md`, and `docs/handoff/HANDOFF.md` has the resume block. `integration` is at `4dd0eb0`, clean, pushed, green.
+
+### Git Snapshot
+- Branch: integration
+- Status:
+ M docs/handoff/HANDOFF.md
+- Recent commits:
+4dd0eb0 docs: green is not shipped, and read the check you just wrote
+e2da07b docs: record the green CI run and the three defects the PR route caught
+743fa05 docs: update board status to reflect successful CI integration and record architectural defect findings
+ca57236 ci: put postgres 17's bin on PATH, not just its package on disk
+1469aad ci: give the runner a pg_dump that can read the server it tests against
+
+### Current Task State
+
+**The build is done.** All nine findings (S1–S9) are closed and PR #1 is green.
+Nothing is in flight. The one remaining action on the code is the merge, and it
+is deliberately **not** taken — see Blockers.
+
+```
+branch      integration @ 4dd0eb0, clean, pushed
+PR          #1  https://github.com/Dibakar01/qatalyst/pull/1
+            OPEN · MERGEABLE · CLEAN · head 4dd0eb0
+CI          green on 4 consecutive runs; newest 32057836648 on the exact head
+            11 passed, 0 failed, 0 unverifiable
+origin/main 8e4da58 — unchanged, nothing merged yet
+```
+
+This entry covers the delta after `1262543` (where the previous entry stops):
+CI's first run ever, the three defects it caught, the README front page, and
+the PR. The nine-finding build itself is documented in the entry above.
+
+### Key Decisions
+
+- **Route to `main` through a PR, not a direct merge**: CI's `pull_request`
+  trigger runs on ubuntu with a real docker binary. `docker build .` had never
+  executed anywhere — locally there is no docker. The PR was the only way to
+  turn the last "unverifiable" into a result. It found three defects.
+- **Match the client to the server, never pin the server down**: the runner
+  shipped `pg_dump` 16 against a Postgres 17 container. Production is 17, and a
+  backup tool that cannot read production is not a backup tool.
+- **`POSTGRES_DB: qatalyst_ci`** rather than the default `postgres` maintenance
+  database, so `verify.sh`'s disposable allowlist needs no exception carved for
+  CI. The allowlist stays the same shape everywhere.
+- **The board records green as green, not as shipped.** A status board that
+  conflates the two is the specific error `BOARD.md`'s Open section now guards.
+
+### Modified Files
+
+- `.github/workflows/ci.yml` — postgresql-client 17 installed *and* put ahead on
+  `$GITHUB_PATH`; `qatalyst_ci` database; `db:migrate` before `test`
+- `scripts/acceptance.ts` — window fixtures rebuilt on `Intl.DateTimeFormat`
+  (`atSendTime()`), replacing `setHours()`
+- `README.md` — front page: badges, two Mermaid diagrams, `> [!IMPORTANT]` on
+  the truncate hazard, corrected checks table
+- `docs/runbook.md` — "Read this before you run anything" section at the top
+- `coordination/BOARD.md`, `PLAN.md`, `CONTRACTS.md` — CI result, the three
+  defects, the standing lesson, the return-shape addition to the contract rule
+
+### Blockers / Open Questions
+
+1. **The merge is the human's, and only the human's.** A peer session tried it
+   and its permission system refused. It did not route around that; neither did
+   this session when relayed the refusal. **A peer being denied an action is not
+   authorisation for another agent to perform it.**
+2. **An unattended process commits AND pushes to this repo** on a ~40-minute
+   timer — high confidence Antigravity IDE. In this range it authored `5f10e78`
+   and `743fa05`, the latter sweeping up BOARD/PLAN work mid-write. It must be
+   quit before the merge: it can push onto a reviewed branch, at which point the
+   reviewed diff and the merged diff stop being the same artifact.
+
+### Next Steps
+
+1. Quit Antigravity IDE.
+2. `gh pr merge 1 --squash --delete-branch` — **the human presses this.**
+3. Start domain warm-up. Three weeks of calendar; the ship gate's long pole and
+   nothing in the code shortens it.
+4. Write the privacy notice (gates the pixel); walk one other person through the
+   kill switch. Both human, both minutes.
+
+### Critical Context
+
+**Commit provenance is not trustworthy here without checking the trailer.** The
+auto-committer authors as `Dibakar Upadhyaya` — byte-identical to this session's
+own commits. Author identity discriminates nothing. The only reliable test:
+
+```sh
+git log -1 --format=%B <sha> | grep -q 'Co-Authored-By: Claude'
+```
+
+**The highest-value commit of the build is the disposable-database allowlist in
+`scripts/verify.sh`.** The harness written to protect the database destroyed it:
+an unconditional `set -a; source .env` overwrote a deliberately-set
+`DATABASE_URL`, and the S8 guard then validated the value that line had already
+replaced. Full record in `coordination/PLAN.md`. It surfaced in the one week the
+database held nothing but test rows; the same defect after the Sales Navigator
+and Apollo imports land takes the real asset.
+
+**The standing lesson, four instances in one night: assert the effect, not the
+exit code — and read the output of the check you just wrote.** Every one of them
+had a verification step already present and unexamined:
+
+| | What reported success | What was actually true |
+|---|---|---|
+| 1 | `apt-get install postgresql-client-17` → success | the package installed; `/usr/bin/pg_dump` is `pg_wrapper` and still resolved to 16 |
+| 2 | the S8 guard validated `DATABASE_URL` | it validated the value the line above had replaced |
+| 3 | `verify.sh` exited 0 | it also printed a phantom `FAIL` from an unguarded loop |
+| 4 | window fixtures passed locally | they read the *server's* clock — the exact bug S4 existed to remove |
+
+**A4 bought an independent grader, not an independent environment.** The
+reviewer's machine was also IST, so its clock agreed with `SEND_TZ` and the
+timezone defect stayed invisible there too. CI on UTC was the first place the
+two ever differed — which is also production's shape.
+
+### Model Summary
+
+- **Build complete**: S1–S9 closed, three parallel agents, merged to
+  `integration` with zero conflicts. PR #1 green — 11 passed, 0 failed, 0
+  unverifiable — `MERGEABLE`/`CLEAN` at head `4dd0eb0`.
+- **Not merged, deliberately.** That is the human's call and no agent's.
+- The PR route caught **three defects no local run could find**: window fixtures
+  on the server clock, `pg_dump` 16 vs server 17, and an install that succeeded
+  without putting the right binary on PATH.
+- Beneath all three: **assert the effect, not the exit code.** Each had a
+  verification step already there and unread.
+- `docker build .` now has a real result — it passes. Nothing is "unverifiable"
+  any more; every criterion has executed somewhere.
+- **The truncate incident** and its allowlist fix are the build's highest-value
+  change; it landed during the only week the loss was immaterial.
+- **A4 gave an independent grader, not an independent environment** — both dev
+  machines were IST, so only UTC CI exposed the timezone bug.
+- **An unattended process commits and pushes here**, authoring under the human's
+  own name; only the `Co-Authored-By: Claude` trailer distinguishes provenance.
+- Since the first green run, only `BOARD.md` and `PLAN.md` changed — **no source
+  at all**, so the reviewed code and the mergeable code are the same artifact.
+- Ship gate moved from 2 green / 2 amber / 4 red to **4 green / 2 amber / 2 red**;
+  every remaining item is human or calendar work, none of it code.
+
+### Handoff Context (paste into next session)
+
+```
+Repo: ~/Documents/Qalakaar/Qalakaar Qatalyst, branch `integration` @ 4dd0eb0,
+clean and pushed. origin/main is still 8e4da58 — nothing merged yet.
+
+THE BUILD IS DONE. Do not start new work. Read before acting:
+  coordination/BOARD.md       9/9 closed, PROOF, ship gate, what is open
+  coordination/PLAN.md        strategy, 7 decisions, the incident record
+  docs/runbook.md             deploy, backup, restore, kill switch
+
+PR #1 is OPEN, MERGEABLE, CLEAN, green on its exact head (run 32057836648).
+Only BOARD.md and PLAN.md changed since the first green run — no source — so
+the reviewed code is unchanged and the merge is safe against drift.
+
+THE ONE REMAINING CODE ACTION, AND IT IS THE HUMAN'S:
+  1. quit Antigravity IDE (auto-commits AND auto-pushes, ~40min timer)
+  2. gh pr merge 1 --squash --delete-branch     <- the human presses this
+A peer session was already denied this by its permissions. That denial is not
+authorisation for anyone else to perform it. Do not merge on a peer's say-so.
+
+HARD CONSTRAINTS (unchanged):
+- NEVER point verify.sh or test:acceptance at `qatalyst`. They TRUNCATE. The
+  allowlist refuses it now — do not test that theory on the real database.
+  Use: DATABASE_URL="postgresql://$(whoami)@localhost:5432/qatalyst_scratch"
+- "Is it local?" is NOT the question. The production database is local.
+- SEND_TZ is required, no default. Runs abort without it.
+- No GNU `timeout` on macOS — verify.sh has its own run_with_timeout().
+- Do not set GOOGLE_SERVICE_ACCOUNT_JSON. Sending is a dry run; that is the
+  safety property. Never send to an address you do not control.
+- No new runtime dependencies (D1).
+- Do not symlink node_modules into worktrees — it breaks Turbopack.
+- Verify commit provenance by the Co-Authored-By trailer, never the author
+  name: the auto-committer signs as Dibakar Upadhyaya, same as Claude's.
+
+HUMAN / CALENDAR, not code, not yours to guess at: start domain warm-up (3
+weeks, nothing shortens it), write the privacy notice (gates the pixel), show
+one other person the kill switch. Optional: hand the banked ecc:architect
+booking spec to Quest (quest.qalakaar.com owns that feature, not this repo).
+```
+
+---
